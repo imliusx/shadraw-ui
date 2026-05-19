@@ -1,0 +1,141 @@
+export class HttpError extends Error {
+  status: number
+  body?: string
+
+  constructor(status: number, body?: string) {
+    super(`HTTP ${status}`)
+    this.name = "HttpError"
+    this.status = status
+    this.body = body
+  }
+}
+
+export class ApiResponseError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ApiResponseError"
+  }
+}
+
+export type ErrorActionType = "retry" | "configure" | "reuse-prompt"
+
+export type ClassifiedError = {
+  title: string
+  description: string
+  action: { label: string; type: ErrorActionType }
+  rawMessage: string
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max) + "…" : text
+}
+
+function extractApiMessage(body?: string): string {
+  if (!body) return ""
+  try {
+    const parsed = JSON.parse(body)
+    const msg = parsed?.error?.message
+    if (typeof msg === "string") return msg
+  } catch {
+    // body 不是 JSON
+  }
+  return truncate(body, 300)
+}
+
+export function classifyError(error: unknown): ClassifiedError {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return {
+      title: "请求超时",
+      description: "请求超过 120 秒未返回,网关可能未响应,请稍后重试",
+      action: { label: "重试", type: "retry" },
+      rawMessage: error.message,
+    }
+  }
+
+  if (error instanceof TypeError && /fetch/i.test(error.message)) {
+    return {
+      title: "无法连接到 Base URL",
+      description:
+        "可能原因:① Base URL 拼写错误;② 网关未开启 CORS(需联系网关管理员);③ 网络断开",
+      action: { label: "检查配置", type: "configure" },
+      rawMessage: error.message,
+    }
+  }
+
+  if (error instanceof HttpError) {
+    const apiMsg = extractApiMessage(error.body)
+    if (error.status === 401) {
+      return {
+        title: "API Key 无效",
+        description: apiMsg || "网关拒绝了当前 Key,可能是密钥过期或填写错误",
+        action: { label: "打开 API 配置", type: "configure" },
+        rawMessage: `HTTP 401: ${apiMsg || error.body || ""}`,
+      }
+    }
+    if (error.status === 403) {
+      return {
+        title: "Key 权限不足",
+        description:
+          apiMsg ||
+          "网关接受了 Key 但拒绝调用此 endpoint,可能 Key 未开通 image_generation 权限",
+        action: { label: "检查配置", type: "configure" },
+        rawMessage: `HTTP 403: ${apiMsg || error.body || ""}`,
+      }
+    }
+    if (error.status === 404) {
+      return {
+        title: "endpoint 不存在",
+        description:
+          apiMsg ||
+          "网关在 /responses 路径返回 404,可能是 Base URL 错误或网关不支持 Responses API",
+        action: { label: "检查 Base URL", type: "configure" },
+        rawMessage: `HTTP 404: ${apiMsg || error.body || ""}`,
+      }
+    }
+    if (error.status === 429) {
+      return {
+        title: "请求过于频繁",
+        description: apiMsg || "网关返回 rate limit,建议稍等几秒再试",
+        action: { label: "重试", type: "retry" },
+        rawMessage: `HTTP 429: ${apiMsg || error.body || ""}`,
+      }
+    }
+    if (error.status >= 500 && error.status < 600) {
+      return {
+        title: "网关错误",
+        description:
+          apiMsg || `网关侧出错 (${error.status}),通常稍后重试就能恢复`,
+        action: { label: "重试", type: "retry" },
+        rawMessage: `HTTP ${error.status}: ${apiMsg || error.body || ""}`,
+      }
+    }
+    return {
+      title: "请求失败",
+      description: apiMsg || `HTTP ${error.status}`,
+      action: { label: "重试", type: "retry" },
+      rawMessage: `HTTP ${error.status}: ${apiMsg || error.body || ""}`,
+    }
+  }
+
+  if (error instanceof ApiResponseError) {
+    return {
+      title: "API 未返回图片",
+      description:
+        "网关返回了响应但没有图像数据,可能是 prompt 触发了 moderation,或 model 不支持图生成",
+      action: { label: "复用提示词修改", type: "reuse-prompt" },
+      rawMessage: error.message,
+    }
+  }
+
+  const raw = error instanceof Error ? error.message : String(error)
+  return {
+    title: "请求失败",
+    description: truncate(raw, 300),
+    action: { label: "重试", type: "retry" },
+    rawMessage: raw,
+  }
+}
+
+export function errorToShortMessage(error: unknown): string {
+  return classifyError(error).title
+}
