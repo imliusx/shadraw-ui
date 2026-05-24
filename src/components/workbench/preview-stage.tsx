@@ -180,7 +180,7 @@ export function PreviewStage({
 
 function GeneratingState() {
   return (
-    <div className="flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 px-4 py-8 text-center">
+    <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 p-6 text-center">
       <Spinner className="size-5 text-muted-foreground" />
       <p className="text-sm font-medium">正在生成图片</p>
       <p className="text-xs text-muted-foreground">

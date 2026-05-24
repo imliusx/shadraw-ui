@@ -42,11 +42,26 @@ function extractApiMessage(body?: string): string {
   return truncate(body, 300)
 }
 
+function extractApiCode(body?: string): string {
+  if (!body) return ""
+  try {
+    const parsed = JSON.parse(body)
+    const code = parsed?.error?.code
+    if (typeof code === "string") return code
+  } catch {
+    // body 不是 JSON
+  }
+  return ""
+}
+
 export function classifyError(error: unknown): ClassifiedError {
-  if (error instanceof DOMException && error.name === "TimeoutError") {
+  if (
+    error instanceof DOMException &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+  ) {
     return {
       title: "请求超时",
-      description: "请求超过 120 秒未返回,网关可能未响应,请稍后重试",
+      description: "请求超过 5 分钟未返回,网关可能未响应,请稍后重试",
       action: { label: "重试", type: "retry" },
       rawMessage: error.message,
     }
@@ -64,6 +79,28 @@ export function classifyError(error: unknown): ClassifiedError {
 
   if (error instanceof HttpError) {
     const apiMsg = extractApiMessage(error.body)
+    const apiCode = extractApiCode(error.body)
+    if (error.status === 400) {
+      if (
+        apiCode === "moderation_blocked" ||
+        apiCode === "content_policy_violation"
+      ) {
+        return {
+          title: "提示词被安全策略拦截",
+          description:
+            apiMsg ||
+            "OpenAI 的安全系统拒绝了本次请求,请调整提示词后重试(避开暴力、色情、特定人物、敏感版权内容)",
+          action: { label: "修改提示词", type: "reuse-prompt" },
+          rawMessage: `HTTP 400 (${apiCode}): ${apiMsg || error.body || ""}`,
+        }
+      }
+      return {
+        title: "请求参数有误",
+        description: apiMsg || "请检查提示词、模型 ID 和参数是否合法",
+        action: { label: "修改提示词", type: "reuse-prompt" },
+        rawMessage: `HTTP 400: ${apiMsg || error.body || ""}`,
+      }
+    }
     if (error.status === 401) {
       return {
         title: "API Key 无效",

@@ -94,7 +94,7 @@ export function LogsView() {
                 setStatusFilter(value as StatusFilter)
               }
             >
-              <SelectTrigger className="w-[140px]">
+              <SelectTrigger className="w-36">
                 <SelectValue placeholder="状态" />
               </SelectTrigger>
               <SelectContent>

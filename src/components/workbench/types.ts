@@ -10,6 +10,7 @@ export type HistoryRecord = {
   pixels: string
   status: HistoryStatus
   base64?: string
+  referenceImages?: string[]
   error?: string
   favorite: boolean
   projectId?: number

@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { AnimatePresence, motion } from "motion/react"
 import {
   Check,
+  ChevronsUpDown,
   CircleAlert,
   CircleUser,
   KeyRound,
@@ -23,9 +24,16 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { PasswordInput } from "@/components/password-input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useMotionVariants } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 import type { ApiStatus } from "@/components/workbench/types"
+import { modelOptions } from "@/lib/api/models"
 
 type SectionId = "account" | "general" | "api"
 
@@ -145,12 +153,13 @@ function SettingsSubNav({
 function ApiConnectionSection() {
   const { config, updateConfig, testConnection } = useConfig()
   const { status: apiStatus, errorMessage } = useApiStatus()
+  const [modelOpen, setModelOpen] = React.useState(false)
 
   const handleTestConnection = React.useCallback(async () => {
-    try {
-      await testConnection()
+    const connected = await testConnection()
+    if (connected) {
       toast.success("连接测试通过")
-    } catch {
+    } else {
       toast.error("连接测试失败")
     }
   }, [testConnection])
@@ -195,14 +204,43 @@ function ApiConnectionSection() {
               />
             </SettingRow>
             <SettingRow label="模型" description="调用的默认模型 ID">
-              <Input
-                className="w-64"
-                value={config.model}
-                onChange={(event) =>
-                  updateConfig({ model: event.target.value })
-                }
-                placeholder="gpt-5.3-codex"
-              />
+              <DropdownMenu open={modelOpen} onOpenChange={setModelOpen}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={modelOpen}
+                    className="w-64 justify-between font-normal"
+                  >
+                    {config.model ? (
+                      modelOptions.find(
+                        (option) => option.value === config.model
+                      )?.label ?? config.model
+                    ) : (
+                      <span className="text-muted-foreground">选择模型</span>
+                    )}
+                    <ChevronsUpDown className="opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-64" align="end">
+                  {modelOptions.map((option) => (
+                    <DropdownMenuItem
+                      key={option.value}
+                      onSelect={() => updateConfig({ model: option.value })}
+                    >
+                      <span>{option.label}</span>
+                      <Check
+                        className={cn(
+                          "ml-auto",
+                          config.model === option.value
+                            ? "opacity-100"
+                            : "opacity-0"
+                        )}
+                      />
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </SettingRow>
           </div>
         </Card>

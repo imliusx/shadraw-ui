@@ -12,10 +12,10 @@ import {
 import { toast } from "sonner"
 import { motion } from "motion/react"
 
-import { useApiStatus, useSettingsDialog } from "@/app/providers/app-state-provider"
+import { useSettingsDialog } from "@/app/providers/app-state-provider"
 import { useAuth, type AuthUser } from "@/app/providers/auth-provider"
+import { ApiStatusIndicator } from "@/components/api-status-indicator"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -25,15 +25,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useMotionVariants } from "@/lib/motion"
-import { cn } from "@/lib/utils"
-import type { ApiStatus } from "@/components/workbench/types"
 
 const NAV_ITEMS = [
   { href: "/", label: "工作台", icon: Palette },
@@ -52,7 +45,6 @@ function avatarLetter(user: AuthUser): string {
 export function AppHeader() {
   const pathname = usePathname()
   const router = useRouter()
-  const { status, errorMessage } = useApiStatus()
   const { openSettings } = useSettingsDialog()
   const { user, logout } = useAuth()
   const { slideInDown } = useMotionVariants()
@@ -99,11 +91,7 @@ export function AppHeader() {
       </nav>
 
       <div className="flex items-center justify-end gap-2">
-        <ApiStatusBadge
-          status={status}
-          errorMessage={errorMessage}
-          onOpenSettings={openSettings}
-        />
+        <ApiStatusIndicator />
         <ThemeToggle />
         {user ? (
           <DropdownMenu>
@@ -160,86 +148,4 @@ export function AppHeader() {
       </div>
     </motion.header>
   )
-}
-
-function ApiStatusBadge({
-  status,
-  errorMessage,
-  onOpenSettings,
-}: {
-  status: ApiStatus
-  errorMessage: string
-  onOpenSettings: () => void
-}) {
-  const config = {
-    idle: {
-      label: "API Untested",
-      dotClassName: "bg-muted-foreground",
-    },
-    testing: {
-      label: "API Testing",
-      dotClassName: "bg-amber-500",
-    },
-    success: {
-      label: "API Ready",
-      dotClassName: "bg-green-500",
-    },
-    error: {
-      label: "API Error",
-      dotClassName: "bg-destructive",
-    },
-  } satisfies Record<ApiStatus, { label: string; dotClassName: string }>
-  const current = config[status]
-
-  const badge = (
-    <Badge
-      variant="outline"
-      className="hidden h-7 border-border bg-background/70 px-3 text-foreground shadow-sm backdrop-blur sm:inline-flex dark:bg-background/55"
-    >
-      <span className="relative mr-1 flex size-2">
-        <span
-          className={cn(
-            "absolute inline-flex size-full animate-ping rounded-full opacity-60",
-            current.dotClassName
-          )}
-        />
-        <span
-          className={cn(
-            "relative inline-flex size-2 rounded-full",
-            current.dotClassName
-          )}
-        />
-      </span>
-      {current.label}
-    </Badge>
-  )
-
-  const linkedBadge = (
-    <button
-      type="button"
-      onClick={onOpenSettings}
-      aria-label="API 状态,点击修改配置"
-      className="inline-flex outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
-    >
-      {badge}
-    </button>
-  )
-
-  if (status === "error" && errorMessage) {
-    const truncated =
-      errorMessage.length > 60
-        ? errorMessage.slice(0, 60) + "..."
-        : errorMessage
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>{linkedBadge}</TooltipTrigger>
-        <TooltipContent>
-          {truncated}
-          <span className="block opacity-70">点击修改配置</span>
-        </TooltipContent>
-      </Tooltip>
-    )
-  }
-
-  return linkedBadge
 }

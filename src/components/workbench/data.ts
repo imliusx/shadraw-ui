@@ -1,6 +1,6 @@
 export const ratios = [
   {
-    label: "默认",
+    label: "auto",
     previewClassName: "aspect-square h-[min(70cqh,70cqw)]",
   },
   {
@@ -27,4 +27,4 @@ export const ratios = [
 
 export const pixelOptions = ["1K", "2K", "4K"]
 
-export const countOptions = [1, 2, 3, 4]
+export const countOptions = [1, 2, 3, 4, 5, 6]

@@ -30,9 +30,10 @@ import {
 
 export function ImageWorkbench() {
   const [prompt, setPrompt] = React.useState("")
-  const [ratio, setRatio] = React.useState("1:1")
+  const [ratio, setRatio] = React.useState("auto")
   const [pixels, setPixels] = React.useState("2K")
   const [count, setCount] = React.useState(1)
+  const [referenceImages, setReferenceImages] = React.useState<string[]>([])
 
   const searchParams = useSearchParams()
   const { records, isHydrated } = useHistory()
@@ -107,6 +108,8 @@ export function ImageWorkbench() {
               setPixels={setPixels}
               count={count}
               setCount={setCount}
+              referenceImages={referenceImages}
+              setReferenceImages={setReferenceImages}
             />
           </SheetContent>
         </Sheet>
@@ -222,6 +225,8 @@ export function ImageWorkbench() {
             setPixels={setPixels}
             count={count}
             setCount={setCount}
+            referenceImages={referenceImages}
+            setReferenceImages={setReferenceImages}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

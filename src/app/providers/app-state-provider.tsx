@@ -200,6 +200,7 @@ type HistoryContextValue = {
     model: string
     ratio: string
     pixels: string
+    referenceImages?: string[]
   }) => Promise<HistoryRecord>
   updateRecord: (
     id: number,
@@ -219,7 +220,7 @@ type ProjectsContextValue = {
 type ConfigContextValue = {
   config: Config
   updateConfig: (patch: Partial<Config>) => void
-  testConnection: () => Promise<void>
+  testConnection: () => Promise<boolean>
 }
 
 type UIContextValue = {
@@ -309,7 +310,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const addRecord = useCallback<HistoryContextValue["addRecord"]>(
-    async ({ prompt, model, ratio, pixels }) => {
+    async ({ prompt, model, ratio, pixels, referenceImages }) => {
       const draft: Omit<HistoryRecord, "id"> = {
         prompt,
         model,
@@ -318,6 +319,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         status: "waiting",
         favorite: false,
         createdAt: Date.now(),
+        ...(referenceImages && referenceImages.length > 0
+          ? { referenceImages }
+          : {}),
       }
       const id = await add<HistoryRecord>("history", draft)
       const record: HistoryRecord = { ...draft, id }
@@ -439,6 +443,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           type: "ui/setApiStatus",
           payload: { status: "success" },
         })
+        return true
       } else {
         dispatch({
           type: "ui/setApiStatus",
@@ -447,6 +452,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             errorMessage: result.classified.title,
           },
         })
+        return false
       }
     },
     []
@@ -693,9 +699,11 @@ type UseGenerateReturn = {
     prompt: string
     ratio: string
     pixels: string
+    referenceImages?: string[]
   }) => Promise<void>
   retry: (id: number) => Promise<void>
   isProcessing: boolean
+  waitingCount: number
 }
 
 export function useGenerate(): UseGenerateReturn {
@@ -729,6 +737,11 @@ export function useGenerate(): UseGenerateReturn {
     [records]
   )
 
+  const waitingCount = useMemo(
+    () => records.filter((record) => record.status === "waiting").length,
+    [records]
+  )
+
   const buildSchedulerDeps = useCallback(
     () => ({
       getNextWaiting: () =>
@@ -740,6 +753,9 @@ export function useGenerate(): UseGenerateReturn {
           apiKey,
           model: target.model,
           prompt: target.prompt,
+          ratio: target.ratio,
+          pixels: target.pixels,
+          referenceImages: target.referenceImages,
           onEvent: (level, message) =>
             appendEventRef.current(level, message),
         })
@@ -788,15 +804,24 @@ export function useGenerate(): UseGenerateReturn {
   )
 
   const submit = useCallback<UseGenerateReturn["submit"]>(
-    async ({ prompt, ratio, pixels }) => {
-      clearEvents()
+    async ({ prompt, ratio, pixels, referenceImages }) => {
+      const hasRunning = historyRef.current.some(
+        (record) => record.status === "running"
+      )
+      if (!hasRunning) {
+        clearEvents()
+      }
       appendEvent("info", `提交生成请求: ${prompt.slice(0, 60)}`)
+      if (referenceImages && referenceImages.length > 0) {
+        appendEvent("info", `附带 ${referenceImages.length} 张参考图`)
+      }
 
       const record = await addRecord({
         prompt,
         model: configRef.current.model,
         ratio,
         pixels,
+        referenceImages,
       })
 
       historyRef.current = [...historyRef.current, record]
@@ -826,5 +851,5 @@ export function useGenerate(): UseGenerateReturn {
     [updateRecord, setActive, appendEvent, clearEvents, buildSchedulerDeps]
   )
 
-  return { submit, retry, isProcessing }
+  return { submit, retry, isProcessing, waitingCount }
 }

@@ -1,4 +1,5 @@
 import type { Config } from "@/components/workbench/types"
+import { RESPONSE_IMAGE_MODEL } from "@/lib/api/models"
 
 const STORAGE_KEY = "shadraw-ui:config"
 const LEGACY_STORAGE_KEY = "imagener:config"
@@ -6,7 +7,7 @@ const LEGACY_STORAGE_KEY = "imagener:config"
 export const DEFAULT_CONFIG: Config = {
   baseUrl: "",
   apiKey: "",
-  model: "gpt-5.3-codex",
+  model: RESPONSE_IMAGE_MODEL,
 }
 
 export function loadConfig(): Config {

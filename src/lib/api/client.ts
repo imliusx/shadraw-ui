@@ -4,6 +4,7 @@ import {
   classifyError,
   type ClassifiedError,
 } from "./errors"
+import { IMAGE_GENERATION_MODEL, RESPONSE_IMAGE_MODEL } from "./models"
 
 export type GenerateEventLevel = "info" | "event" | "data" | "done" | "error"
 
@@ -17,6 +18,9 @@ type GenerateImageParams = {
   apiKey: string
   model: string
   prompt: string
+  ratio: string
+  pixels: string
+  referenceImages?: string[]
   onEvent?: OnGenerateEvent
 }
 
@@ -28,10 +32,24 @@ const NOISY_EVENTS = new Set([
   "response.output_text.delta",
 ])
 
+const IMAGE_GENERATION_EVENTS = new Set([
+  "response.image_generation_call.completed",
+  "response.image_generation_call.generating",
+  "response.image_generation_call.in_progress",
+  "response.image_generation_call.partial_image",
+])
+
+const GENERATE_IMAGE_TIMEOUT_MS = 300_000
+
 function normalizeBaseUrl(baseUrl: string): string {
   let base = baseUrl.trim().replace(/\/+$/, "")
   if (base.endsWith("/v1")) base = base.slice(0, -3)
   return base
+}
+
+function withApiProxy(url: string): string {
+  if (typeof window === "undefined") return url
+  return `/api/proxy?target=${encodeURIComponent(url)}`
 }
 
 function buildCodexHeaders(apiKey: string): Record<string, string> {
@@ -44,6 +62,32 @@ function buildCodexHeaders(apiKey: string): Record<string, string> {
     originator: "codex_cli_rs",
     session_id: `browser-${Date.now()}`,
   }
+}
+
+function mapImageSize(ratio: string): string {
+  if (ratio === "3:4" || ratio === "9:16") return "1024x1536"
+  if (ratio === "4:3" || ratio === "16:9") return "1536x1024"
+  if (ratio === "1:1") return "1024x1024"
+  return "auto"
+}
+
+function mapImageQuality(pixels: string): string {
+  if (pixels === "4K") return "high"
+  if (pixels === "1K") return "low"
+  return "medium"
+}
+
+function dataUrlToBlob(dataUrl: string): { blob: Blob; ext: string } {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/)
+  if (!match) {
+    throw new ApiResponseError("参考图格式无效")
+  }
+  const mime = match[1]
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const ext = mime === "image/jpeg" ? "jpg" : mime.slice("image/".length)
+  return { blob: new Blob([bytes], { type: mime }), ext }
 }
 
 function extractBase64FromStream(obj: unknown): string | null {
@@ -71,6 +115,19 @@ function extractBase64FromStream(obj: unknown): string | null {
   return null
 }
 
+function extractBase64FromImagesResponse(obj: unknown): string | null {
+  if (!obj || typeof obj !== "object") return null
+  const data = (obj as { data?: unknown }).data
+  if (!Array.isArray(data)) return null
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue
+    const record = item as { b64_json?: unknown; base64?: unknown }
+    if (typeof record.b64_json === "string") return record.b64_json
+    if (typeof record.base64 === "string") return record.base64
+  }
+  return null
+}
+
 function parseDataLine(trimmed: string): unknown | null {
   const dataStr = trimmed.slice(6)
   if (!dataStr || dataStr === "[DONE]") return null
@@ -81,29 +138,148 @@ function parseDataLine(trimmed: string): unknown | null {
   }
 }
 
+async function generateImageWithImagesApi(
+  params: GenerateImageParams
+): Promise<{ base64: string }> {
+  const { baseUrl, apiKey, model, prompt, ratio, pixels, referenceImages, onEvent } =
+    params
+
+  if (referenceImages && referenceImages.length > 0) {
+    const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/images/edits"
+    const url = withApiProxy(upstreamUrl)
+    const form = new FormData()
+    form.append("model", model)
+    form.append("prompt", prompt)
+    form.append("size", mapImageSize(ratio))
+    form.append("quality", mapImageQuality(pixels))
+    form.append("n", "1")
+    referenceImages.forEach((dataUrl, index) => {
+      const { blob, ext } = dataUrlToBlob(dataUrl)
+      form.append("image", blob, `reference-${index + 1}.${ext}`)
+    })
+
+    onEvent?.(
+      "info",
+      `POST ${upstreamUrl} (with ${referenceImages.length} reference image${
+        referenceImages.length > 1 ? "s" : ""
+      })`
+    )
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
+    })
+
+    if (!resp.ok) {
+      const errorBody = await resp.text()
+      onEvent?.("error", `HTTP ${resp.status}: ${errorBody.slice(0, 200)}`)
+      throw new HttpError(resp.status, errorBody)
+    }
+
+    const data = (await resp.json()) as unknown
+    const base64 = extractBase64FromImagesResponse(data)
+    if (!base64) {
+      onEvent?.("error", "Images Edit API 未返回 base64 图片")
+      throw new ApiResponseError("API 未返回图片")
+    }
+
+    const kb = Math.round(base64.length / 1024)
+    onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
+    return { base64 }
+  }
+
+  const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/images/generations"
+  const url = withApiProxy(upstreamUrl)
+  const body = {
+    model,
+    prompt,
+    size: mapImageSize(ratio),
+    quality: mapImageQuality(pixels),
+    n: 1,
+  }
+
+  onEvent?.("info", `POST ${upstreamUrl}`)
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
+  })
+
+  if (!resp.ok) {
+    const errorBody = await resp.text()
+    onEvent?.("error", `HTTP ${resp.status}: ${errorBody.slice(0, 200)}`)
+    throw new HttpError(resp.status, errorBody)
+  }
+
+  const data = (await resp.json()) as unknown
+  const base64 = extractBase64FromImagesResponse(data)
+  if (!base64) {
+    onEvent?.("error", "Images API 未返回 base64 图片")
+    throw new ApiResponseError("API 未返回图片")
+  }
+
+  const kb = Math.round(base64.length / 1024)
+  onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
+  return { base64 }
+}
+
 export async function generateImage(
   params: GenerateImageParams
 ): Promise<{ base64: string }> {
-  const { baseUrl, apiKey, model, prompt, onEvent } = params
-  const url = normalizeBaseUrl(baseUrl) + "/v1/responses"
+  if (params.model === IMAGE_GENERATION_MODEL) {
+    return generateImageWithImagesApi(params)
+  }
+
+  const { baseUrl, apiKey, model, prompt, referenceImages, onEvent } = params
+  const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/responses"
+  const url = withApiProxy(upstreamUrl)
+
+  const hasReference = referenceImages && referenceImages.length > 0
+  const userContent = hasReference
+    ? [
+        {
+          type: "input_text",
+          text: `请基于下方参考图生成新的图片,描述:${prompt}`,
+        },
+        ...referenceImages.map((dataUrl) => ({
+          type: "input_image",
+          image_url: dataUrl,
+        })),
+      ]
+    : `请生成以下描述的图片:${prompt}`
 
   const body = {
     model,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `请生成以下描述的图片:${prompt}` },
+      { role: "user", content: userContent },
     ],
     tools: [{ type: "image_generation", output_format: "png" }],
+    tool_choice: { type: "image_generation" },
     stream: true,
   }
 
-  onEvent?.("info", `POST ${url}`)
+  onEvent?.(
+    "info",
+    hasReference
+      ? `POST ${upstreamUrl} (with ${referenceImages.length} reference image${
+          referenceImages.length > 1 ? "s" : ""
+        })`
+      : `POST ${upstreamUrl}`
+  )
 
   const resp = await fetch(url, {
     method: "POST",
     headers: buildCodexHeaders(apiKey),
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
   })
 
   if (!resp.ok) {
@@ -122,6 +298,8 @@ export async function generateImage(
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
+  let sawImageGenerationEvent = false
+  let sawTextOutputEvent = false
 
   const processLine = (rawLine: string): string | null => {
     const trimmed = rawLine.trim()
@@ -129,6 +307,12 @@ export async function generateImage(
 
     if (trimmed.startsWith("event: ")) {
       const eventName = trimmed.slice(7).trim()
+      if (IMAGE_GENERATION_EVENTS.has(eventName)) {
+        sawImageGenerationEvent = true
+      }
+      if (eventName.startsWith("response.output_text.")) {
+        sawTextOutputEvent = true
+      }
       if (eventName && !NOISY_EVENTS.has(eventName)) {
         onEvent?.("event", eventName)
       }
@@ -175,6 +359,11 @@ export async function generateImage(
     reader.releaseLock()
   }
 
+  if (!sawImageGenerationEvent && sawTextOutputEvent) {
+    onEvent?.("error", "模型返回了文本,未调用 image_generation 工具")
+    throw new ApiResponseError("模型未调用图片生成工具")
+  }
+
   onEvent?.("error", "SSE 流结束但未捕获到图片")
   throw new ApiResponseError("API 未返回图片")
 }
@@ -195,17 +384,13 @@ export async function testConnection(
   const base = normalizeBaseUrl(baseUrl)
 
   try {
-    const probe = await fetch(base + "/v1/models", {
+    const probe = await fetch(withApiProxy(base + "/v1/models"), {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
     })
-
-    if (probe.ok) {
-      return { ok: true }
-    }
 
     if (probe.status === 401 || probe.status === 403) {
       const body = await probe.text()
@@ -215,29 +400,7 @@ export async function testConnection(
       }
     }
 
-    if (probe.status === 404) {
-      const fallback = await fetch(base + "/v1/responses", {
-        method: "POST",
-        headers: buildCodexHeaders(apiKey),
-        body: JSON.stringify({
-          model: "gpt-5.3-codex",
-          input: " ",
-          stream: false,
-        }),
-      })
-
-      if (fallback.ok) {
-        return { ok: true }
-      }
-
-      if (fallback.status === 401 || fallback.status === 403) {
-        const body = await fallback.text()
-        return {
-          ok: false,
-          classified: classifyError(new HttpError(fallback.status, body)),
-        }
-      }
-
+    if (probe.status < 500) {
       return { ok: true }
     }
 
