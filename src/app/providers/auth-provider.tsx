@@ -24,6 +24,7 @@ export type AuthUser = {
   displayName: string
   email: string
   avatarSeed: string
+  role: "admin" | "user"
 }
 
 export type AuthStatus = "idle" | "submitting" | "error"
@@ -51,6 +52,7 @@ function toUser(api: ApiAuthUser): AuthUser {
     email: api.email,
     displayName: api.displayName || localPart,
     avatarSeed: api.displayName || localPart,
+    role: api.role === "admin" ? "admin" : "user",
   }
 }
 

@@ -7,6 +7,7 @@ import {
   LogOut,
   Palette,
   Settings,
+  Shield,
   Terminal,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -128,6 +129,14 @@ export function AppHeader() {
                 <Settings className="size-4" />
                 设置
               </DropdownMenuItem>
+              {user.role === "admin" ? (
+                <DropdownMenuItem
+                  onSelect={() => router.push("/admin")}
+                >
+                  <Shield className="size-4" />
+                  管理后台
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={handleLogout}>
                 <LogOut className="size-4" />

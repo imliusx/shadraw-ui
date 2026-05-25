@@ -140,8 +140,7 @@ export function ControlPanel({
     toast.info("已提交生成任务")
   }, [prompt, ratio, pixels, referenceImages, submit])
 
-  const apiConfigured =
-    config.baseUrl.trim().length > 0 && config.apiKey.trim().length > 0
+  const apiConfigured = Boolean(config.model)
 
   const generateDisabled =
     prompt.trim().length === 0 || !apiConfigured

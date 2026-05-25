@@ -1,415 +1,192 @@
-import {
-  ApiResponseError,
-  HttpError,
-  classifyError,
-  type ClassifiedError,
-} from "./errors"
-import { IMAGE_GENERATION_MODEL, RESPONSE_IMAGE_MODEL } from "./models"
+// 共用 HTTP client：统一响应外壳、错误码白名单、401 自动 refresh + 重试。
+// 业务接口（records / projects / admin）都通过此模块发请求。
 
-export type GenerateEventLevel = "info" | "event" | "data" | "done" | "error"
+import { tokenStorage, type StoredTokens } from "./auth-storage"
 
-export type OnGenerateEvent = (
-  level: GenerateEventLevel,
-  message: string
-) => void
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080"
 
-type GenerateImageParams = {
-  baseUrl: string
-  apiKey: string
-  model: string
-  prompt: string
-  ratio: string
-  pixels: string
-  referenceImages?: string[]
-  onEvent?: OnGenerateEvent
-}
+export type ApiErrorCode =
+  | "validation_failed"
+  | "unauthorized"
+  | "forbidden"
+  | "account_disabled"
+  | "not_found"
+  | "conflict"
+  | "rate_limited"
+  | "upstream_error"
+  | "internal_error"
+  | "network_error"
 
-const SYSTEM_PROMPT =
-  "你是一个图片生成助手。用户要求你生成图片时,你必须调用 image_generation 工具来生成图片,不要用文字描述图片内容。直接生成图片,不要多说任何话。"
+export class ApiError extends Error {
+  readonly code: ApiErrorCode
+  readonly status: number
+  readonly fields?: Record<string, string>
 
-const NOISY_EVENTS = new Set([
-  "keepalive",
-  "response.output_text.delta",
-])
-
-const IMAGE_GENERATION_EVENTS = new Set([
-  "response.image_generation_call.completed",
-  "response.image_generation_call.generating",
-  "response.image_generation_call.in_progress",
-  "response.image_generation_call.partial_image",
-])
-
-const GENERATE_IMAGE_TIMEOUT_MS = 300_000
-
-function normalizeBaseUrl(baseUrl: string): string {
-  let base = baseUrl.trim().replace(/\/+$/, "")
-  if (base.endsWith("/v1")) base = base.slice(0, -3)
-  return base
-}
-
-function withApiProxy(url: string): string {
-  if (typeof window === "undefined") return url
-  return `/api/proxy?target=${encodeURIComponent(url)}`
-}
-
-function buildCodexHeaders(apiKey: string): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    accept: "text/event-stream",
-    "chatgpt-account-id": "",
-    version: "0.122.0",
-    originator: "codex_cli_rs",
-    session_id: `browser-${Date.now()}`,
+  constructor(
+    code: ApiErrorCode,
+    message: string,
+    status: number,
+    fields?: Record<string, string>
+  ) {
+    super(message)
+    this.code = code
+    this.status = status
+    this.fields = fields
   }
 }
 
-function mapImageSize(ratio: string): string {
-  if (ratio === "3:4" || ratio === "9:16") return "1024x1536"
-  if (ratio === "4:3" || ratio === "16:9") return "1536x1024"
-  if (ratio === "1:1") return "1024x1024"
-  return "auto"
+type Envelope<T> = {
+  data: T | null
+  error: { code: string; message: string; fields?: Record<string, string> } | null
+  meta?: PageMeta
 }
 
-function mapImageQuality(pixels: string): string {
-  if (pixels === "4K") return "high"
-  if (pixels === "1K") return "low"
-  return "medium"
+export type PageMeta = {
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
 }
 
-function dataUrlToBlob(dataUrl: string): { blob: Blob; ext: string } {
-  const match = dataUrl.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/)
-  if (!match) {
-    throw new ApiResponseError("参考图格式无效")
+export type RequestOptions = {
+  auth?: boolean
+  retry401?: boolean
+  /** when true, returns the raw envelope (with meta); otherwise returns just data */
+  withMeta?: boolean
+  /** override Content-Type; pass null to omit (for FormData etc.) */
+  contentType?: string | null
+  /** custom body (FormData, Blob...); takes precedence over jsonBody */
+  rawBody?: BodyInit
+}
+
+export type ApiResponse<T> = { data: T; meta?: PageMeta }
+
+async function request<T>(
+  path: string,
+  init: { method?: string; jsonBody?: unknown } & RequestOptions = {}
+): Promise<ApiResponse<T>> {
+  const {
+    method = "GET",
+    jsonBody,
+    auth = true,
+    retry401 = true,
+    contentType,
+    rawBody,
+  } = init
+
+  const headers = new Headers()
+  if (contentType === undefined) {
+    if (jsonBody !== undefined) headers.set("Content-Type", "application/json")
+  } else if (contentType !== null) {
+    headers.set("Content-Type", contentType)
   }
-  const mime = match[1]
-  const binary = atob(match[2])
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  const ext = mime === "image/jpeg" ? "jpg" : mime.slice("image/".length)
-  return { blob: new Blob([bytes], { type: mime }), ext }
-}
-
-function extractBase64FromStream(obj: unknown): string | null {
-  if (obj == null) return null
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const found = extractBase64FromStream(item)
-      if (found) return found
-    }
-    return null
-  }
-  if (typeof obj === "object") {
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      if (
-        key === "result" &&
-        typeof value === "string" &&
-        (value.startsWith("iVBOR") || value.length > 1000)
-      ) {
-        return value
-      }
-      const found = extractBase64FromStream(value)
-      if (found) return found
+  if (auth) {
+    const tokens = tokenStorage.read()
+    if (tokens?.accessToken) {
+      headers.set("Authorization", `Bearer ${tokens.accessToken}`)
     }
   }
-  return null
-}
 
-function extractBase64FromImagesResponse(obj: unknown): string | null {
-  if (!obj || typeof obj !== "object") return null
-  const data = (obj as { data?: unknown }).data
-  if (!Array.isArray(data)) return null
-  for (const item of data) {
-    if (!item || typeof item !== "object") continue
-    const record = item as { b64_json?: unknown; base64?: unknown }
-    if (typeof record.b64_json === "string") return record.b64_json
-    if (typeof record.base64 === "string") return record.base64
-  }
-  return null
-}
+  const body =
+    rawBody !== undefined
+      ? rawBody
+      : jsonBody !== undefined
+        ? JSON.stringify(jsonBody)
+        : undefined
 
-function parseDataLine(trimmed: string): unknown | null {
-  const dataStr = trimmed.slice(6)
-  if (!dataStr || dataStr === "[DONE]") return null
+  let resp: Response
   try {
-    return JSON.parse(dataStr)
-  } catch {
-    return null
-  }
-}
-
-async function generateImageWithImagesApi(
-  params: GenerateImageParams
-): Promise<{ base64: string }> {
-  const { baseUrl, apiKey, model, prompt, ratio, pixels, referenceImages, onEvent } =
-    params
-
-  if (referenceImages && referenceImages.length > 0) {
-    const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/images/edits"
-    const url = withApiProxy(upstreamUrl)
-    const form = new FormData()
-    form.append("model", model)
-    form.append("prompt", prompt)
-    form.append("size", mapImageSize(ratio))
-    form.append("quality", mapImageQuality(pixels))
-    form.append("n", "1")
-    referenceImages.forEach((dataUrl, index) => {
-      const { blob, ext } = dataUrlToBlob(dataUrl)
-      form.append("image", blob, `reference-${index + 1}.${ext}`)
-    })
-
-    onEvent?.(
-      "info",
-      `POST ${upstreamUrl} (with ${referenceImages.length} reference image${
-        referenceImages.length > 1 ? "s" : ""
-      })`
+    resp = await fetch(`${API_BASE}${path}`, { method, headers, body })
+  } catch (err) {
+    throw new ApiError(
+      "network_error",
+      err instanceof Error ? err.message : "网络异常",
+      0
     )
+  }
 
-    const resp = await fetch(url, {
+  const text = await resp.text()
+  let env: Envelope<T> | null = null
+  if (text) {
+    try {
+      env = JSON.parse(text) as Envelope<T>
+    } catch {
+      // fall through
+    }
+  }
+
+  if (resp.ok && env && env.data !== null) {
+    return { data: env.data, meta: env.meta }
+  }
+
+  if (resp.status === 401 && auth && retry401) {
+    const refreshed = await tryRefresh()
+    if (refreshed) {
+      return request<T>(path, { ...init, retry401: false })
+    }
+  }
+
+  const code = (env?.error?.code as ApiErrorCode | undefined) ?? "internal_error"
+  const message = env?.error?.message ?? `请求失败 (${resp.status})`
+  throw new ApiError(code, message, resp.status, env?.error?.fields)
+}
+
+async function tryRefresh(): Promise<boolean> {
+  const tokens = tokenStorage.read()
+  if (!tokens?.refreshToken) return false
+  try {
+    const headers = new Headers({ "Content-Type": "application/json" })
+    const resp = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-      signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
+      headers,
+      body: JSON.stringify({ refreshToken: tokens.refreshToken }),
     })
-
     if (!resp.ok) {
-      const errorBody = await resp.text()
-      onEvent?.("error", `HTTP ${resp.status}: ${errorBody.slice(0, 200)}`)
-      throw new HttpError(resp.status, errorBody)
+      tokenStorage.clear()
+      return false
     }
-
-    const data = (await resp.json()) as unknown
-    const base64 = extractBase64FromImagesResponse(data)
-    if (!base64) {
-      onEvent?.("error", "Images Edit API 未返回 base64 图片")
-      throw new ApiResponseError("API 未返回图片")
+    const env = (await resp.json()) as Envelope<{
+      tokens: StoredTokens & { expiresIn: number }
+    }>
+    if (!env.data?.tokens) {
+      tokenStorage.clear()
+      return false
     }
-
-    const kb = Math.round(base64.length / 1024)
-    onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
-    return { base64 }
-  }
-
-  const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/images/generations"
-  const url = withApiProxy(upstreamUrl)
-  const body = {
-    model,
-    prompt,
-    size: mapImageSize(ratio),
-    quality: mapImageQuality(pixels),
-    n: 1,
-  }
-
-  onEvent?.("info", `POST ${upstreamUrl}`)
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
-  })
-
-  if (!resp.ok) {
-    const errorBody = await resp.text()
-    onEvent?.("error", `HTTP ${resp.status}: ${errorBody.slice(0, 200)}`)
-    throw new HttpError(resp.status, errorBody)
-  }
-
-  const data = (await resp.json()) as unknown
-  const base64 = extractBase64FromImagesResponse(data)
-  if (!base64) {
-    onEvent?.("error", "Images API 未返回 base64 图片")
-    throw new ApiResponseError("API 未返回图片")
-  }
-
-  const kb = Math.round(base64.length / 1024)
-  onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
-  return { base64 }
-}
-
-export async function generateImage(
-  params: GenerateImageParams
-): Promise<{ base64: string }> {
-  if (params.model === IMAGE_GENERATION_MODEL) {
-    return generateImageWithImagesApi(params)
-  }
-
-  const { baseUrl, apiKey, model, prompt, referenceImages, onEvent } = params
-  const upstreamUrl = normalizeBaseUrl(baseUrl) + "/v1/responses"
-  const url = withApiProxy(upstreamUrl)
-
-  const hasReference = referenceImages && referenceImages.length > 0
-  const userContent = hasReference
-    ? [
-        {
-          type: "input_text",
-          text: `请基于下方参考图生成新的图片,描述:${prompt}`,
-        },
-        ...referenceImages.map((dataUrl) => ({
-          type: "input_image",
-          image_url: dataUrl,
-        })),
-      ]
-    : `请生成以下描述的图片:${prompt}`
-
-  const body = {
-    model,
-    input: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userContent },
-    ],
-    tools: [{ type: "image_generation", output_format: "png" }],
-    tool_choice: { type: "image_generation" },
-    stream: true,
-  }
-
-  onEvent?.(
-    "info",
-    hasReference
-      ? `POST ${upstreamUrl} (with ${referenceImages.length} reference image${
-          referenceImages.length > 1 ? "s" : ""
-        })`
-      : `POST ${upstreamUrl}`
-  )
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: buildCodexHeaders(apiKey),
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(GENERATE_IMAGE_TIMEOUT_MS),
-  })
-
-  if (!resp.ok) {
-    const errorBody = await resp.text()
-    onEvent?.("error", `HTTP ${resp.status}: ${errorBody.slice(0, 200)}`)
-    throw new HttpError(resp.status, errorBody)
-  }
-
-  if (!resp.body) {
-    onEvent?.("error", "响应无 body")
-    throw new ApiResponseError("API 未返回响应流")
-  }
-
-  onEvent?.("info", `HTTP ${resp.status},开始接收 SSE 流`)
-
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let sawImageGenerationEvent = false
-  let sawTextOutputEvent = false
-
-  const processLine = (rawLine: string): string | null => {
-    const trimmed = rawLine.trim()
-    if (!trimmed) return null
-
-    if (trimmed.startsWith("event: ")) {
-      const eventName = trimmed.slice(7).trim()
-      if (IMAGE_GENERATION_EVENTS.has(eventName)) {
-        sawImageGenerationEvent = true
-      }
-      if (eventName.startsWith("response.output_text.")) {
-        sawTextOutputEvent = true
-      }
-      if (eventName && !NOISY_EVENTS.has(eventName)) {
-        onEvent?.("event", eventName)
-      }
-      return null
-    }
-
-    if (trimmed.startsWith("data: ")) {
-      const data = parseDataLine(trimmed)
-      if (data == null) return null
-      const found = extractBase64FromStream(data)
-      if (found) return found
-    }
-
-    return null
-  }
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split("\n")
-      buffer = lines.pop() ?? ""
-
-      for (const line of lines) {
-        const found = processLine(line)
-        if (found) {
-          const kb = Math.round(found.length / 1024)
-          onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
-          await reader.cancel().catch(() => {})
-          return { base64: found }
-        }
-      }
-    }
-
-    const tailFound = processLine(buffer)
-    if (tailFound) {
-      const kb = Math.round(tailFound.length / 1024)
-      onEvent?.("done", `图片已抓取 (≈ ${kb} KB base64)`)
-      return { base64: tailFound }
-    }
-  } finally {
-    reader.releaseLock()
-  }
-
-  if (!sawImageGenerationEvent && sawTextOutputEvent) {
-    onEvent?.("error", "模型返回了文本,未调用 image_generation 工具")
-    throw new ApiResponseError("模型未调用图片生成工具")
-  }
-
-  onEvent?.("error", "SSE 流结束但未捕获到图片")
-  throw new ApiResponseError("API 未返回图片")
-}
-
-type TestConnectionParams = {
-  baseUrl: string
-  apiKey: string
-}
-
-type TestConnectionResult =
-  | { ok: true }
-  | { ok: false; classified: ClassifiedError }
-
-export async function testConnection(
-  params: TestConnectionParams
-): Promise<TestConnectionResult> {
-  const { baseUrl, apiKey } = params
-  const base = normalizeBaseUrl(baseUrl)
-
-  try {
-    const probe = await fetch(withApiProxy(base + "/v1/models"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+    tokenStorage.write({
+      accessToken: env.data.tokens.accessToken,
+      refreshToken: env.data.tokens.refreshToken,
     })
-
-    if (probe.status === 401 || probe.status === 403) {
-      const body = await probe.text()
-      return {
-        ok: false,
-        classified: classifyError(new HttpError(probe.status, body)),
-      }
-    }
-
-    if (probe.status < 500) {
-      return { ok: true }
-    }
-
-    const body = await probe.text()
-    return {
-      ok: false,
-      classified: classifyError(new HttpError(probe.status, body)),
-    }
-  } catch (error) {
-    return { ok: false, classified: classifyError(error) }
+    return true
+  } catch {
+    tokenStorage.clear()
+    return false
   }
+}
+
+export const apiClient = {
+  get: <T>(path: string, opts: RequestOptions = {}) =>
+    request<T>(path, { method: "GET", ...opts }),
+  post: <T>(path: string, body?: unknown, opts: RequestOptions = {}) =>
+    request<T>(path, { method: "POST", jsonBody: body, ...opts }),
+  put: <T>(path: string, body?: unknown, opts: RequestOptions = {}) =>
+    request<T>(path, { method: "PUT", jsonBody: body, ...opts }),
+  patch: <T>(path: string, body?: unknown, opts: RequestOptions = {}) =>
+    request<T>(path, { method: "PATCH", jsonBody: body, ...opts }),
+  delete: <T>(path: string, opts: RequestOptions = {}) =>
+    request<T>(path, { method: "DELETE", ...opts }),
+}
+
+/** Convenience: GET an image stream URL with bearer header.
+ *  Returns a blob URL (`URL.createObjectURL`) the caller must revoke later.
+ */
+export async function fetchImageBlobURL(recordId: string): Promise<string> {
+  const tokens = tokenStorage.read()
+  const headers = new Headers()
+  if (tokens?.accessToken) headers.set("Authorization", `Bearer ${tokens.accessToken}`)
+  const resp = await fetch(`${API_BASE}/api/v1/images/${recordId}`, { headers })
+  if (!resp.ok) {
+    throw new ApiError("not_found", `image ${recordId} ${resp.status}`, resp.status)
+  }
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
 }

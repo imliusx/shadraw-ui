@@ -30,3 +30,6 @@ export type Config = {
   apiKey: string
   model: string
 }
+
+// 保留 baseUrl / apiKey 字段是为了向后兼容；新代码只读 model，
+// 真实的上游连接信息由后端管理员配置。

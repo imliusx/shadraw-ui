@@ -10,14 +10,15 @@ import {
   useRef,
   type ReactNode,
 } from "react"
+
 import {
-  testConnection as testConnectionApi,
-  generateImage,
-  type GenerateEventLevel,
-} from "@/lib/api/client"
-import { add, del, getAll, put } from "@/lib/idb/db"
-import { DEFAULT_CONFIG, loadConfig, saveConfig } from "@/lib/config/storage"
-import { startQueue } from "@/lib/queue/scheduler"
+  appConfigApi,
+  projectsApi,
+  recordsApi,
+  type RecordDTO,
+} from "@/lib/api/records-client"
+import { fetchImageBlobURL, ApiError } from "@/lib/api/client"
+import { tokenStorage } from "@/lib/api/auth-storage"
 import type {
   ApiStatus,
   Config,
@@ -31,7 +32,7 @@ type LightboxState = {
   navList: number[] | null
 }
 
-export type EventLogLevel = GenerateEventLevel
+export type EventLogLevel = "info" | "event" | "data" | "done" | "error"
 
 export type EventLogEntry = {
   id: number
@@ -41,11 +42,15 @@ export type EventLogEntry = {
 }
 
 const EVENT_LOG_CAP = 200
+const POLL_INTERVAL_MS = 2000
+
+const DEFAULT_CONFIG: Config = { baseUrl: "", apiKey: "", model: "" }
 
 type AppState = {
   history: HistoryRecord[]
   projects: Project[]
   config: Config
+  enabledModels: string[]
   activeHistoryId: number | null
   lightbox: LightboxState
   apiStatus: ApiStatus
@@ -67,8 +72,9 @@ type AppAction =
   | { type: "projects/add"; payload: Project }
   | { type: "projects/rename"; payload: { id: number; name: string } }
   | { type: "projects/delete"; payload: number }
-  | { type: "config/load"; payload: Config }
+  | { type: "config/load"; payload: { config: Config; enabledModels: string[] } }
   | { type: "config/update"; payload: Partial<Config> }
+  | { type: "enabledModels/set"; payload: string[] }
   | { type: "ui/setActive"; payload: number | null }
   | {
       type: "ui/openLightbox"
@@ -88,6 +94,7 @@ const initialState: AppState = {
   history: [],
   projects: [],
   config: DEFAULT_CONFIG,
+  enabledModels: [],
   activeHistoryId: null,
   lightbox: { open: false, recordId: null, navList: null },
   apiStatus: "idle",
@@ -106,22 +113,16 @@ function reducer(state: AppState, action: AppAction): AppState {
     case "history/update":
       return {
         ...state,
-        history: state.history.map((record) =>
-          record.id === action.payload.id
-            ? { ...record, ...action.payload.patch }
-            : record
+        history: state.history.map((r) =>
+          r.id === action.payload.id ? { ...r, ...action.payload.patch } : r
         ),
       }
     case "history/delete":
       return {
         ...state,
-        history: state.history.filter(
-          (record) => record.id !== action.payload
-        ),
+        history: state.history.filter((r) => r.id !== action.payload),
         activeHistoryId:
-          state.activeHistoryId === action.payload
-            ? null
-            : state.activeHistoryId,
+          state.activeHistoryId === action.payload ? null : state.activeHistoryId,
       }
     case "projects/load":
       return { ...state, projects: action.payload }
@@ -130,28 +131,28 @@ function reducer(state: AppState, action: AppAction): AppState {
     case "projects/rename":
       return {
         ...state,
-        projects: state.projects.map((project) =>
-          project.id === action.payload.id
-            ? { ...project, name: action.payload.name }
-            : project
+        projects: state.projects.map((p) =>
+          p.id === action.payload.id ? { ...p, name: action.payload.name } : p
         ),
       }
     case "projects/delete":
       return {
         ...state,
-        projects: state.projects.filter(
-          (project) => project.id !== action.payload
-        ),
-        history: state.history.map((record) =>
-          record.projectId === action.payload
-            ? { ...record, projectId: undefined }
-            : record
+        projects: state.projects.filter((p) => p.id !== action.payload),
+        history: state.history.map((r) =>
+          r.projectId === action.payload ? { ...r, projectId: undefined } : r
         ),
       }
     case "config/load":
-      return { ...state, config: action.payload }
+      return {
+        ...state,
+        config: action.payload.config,
+        enabledModels: action.payload.enabledModels,
+      }
     case "config/update":
       return { ...state, config: { ...state.config, ...action.payload } }
+    case "enabledModels/set":
+      return { ...state, enabledModels: action.payload }
     case "ui/setActive":
       return { ...state, activeHistoryId: action.payload }
     case "ui/openLightbox":
@@ -164,10 +165,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         },
       }
     case "ui/closeLightbox":
-      return {
-        ...state,
-        lightbox: { open: false, recordId: null, navList: null },
-      }
+      return { ...state, lightbox: { open: false, recordId: null, navList: null } }
     case "ui/setApiStatus":
       return {
         ...state,
@@ -178,9 +176,7 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, isHydrated: true }
     case "events/append": {
       const next = [...state.eventLog, action.payload]
-      if (next.length > EVENT_LOG_CAP) {
-        next.splice(0, next.length - EVENT_LOG_CAP)
-      }
+      if (next.length > EVENT_LOG_CAP) next.splice(0, next.length - EVENT_LOG_CAP)
       return { ...state, eventLog: next }
     }
     case "events/clear":
@@ -202,10 +198,7 @@ type HistoryContextValue = {
     pixels: string
     referenceImages?: string[]
   }) => Promise<HistoryRecord>
-  updateRecord: (
-    id: number,
-    patch: Partial<HistoryRecord>
-  ) => Promise<void>
+  updateRecord: (id: number, patch: Partial<HistoryRecord>) => Promise<void>
   deleteRecord: (id: number) => Promise<void>
   getById: (id: number) => HistoryRecord | undefined
 }
@@ -219,8 +212,10 @@ type ProjectsContextValue = {
 
 type ConfigContextValue = {
   config: Config
+  enabledModels: string[]
   updateConfig: (patch: Partial<Config>) => void
-  testConnection: () => Promise<boolean>
+  refreshEnabledModels: () => Promise<void>
+  testConnection: () => Promise<boolean> // legacy no-op; admin handles real test
 }
 
 type UIContextValue = {
@@ -248,105 +243,188 @@ const ConfigContext = createContext<ConfigContextValue | null>(null)
 const UIContext = createContext<UIContextValue | null>(null)
 const EventLogContext = createContext<EventLogContextValue | null>(null)
 
+// ---- helpers ----
+
+function dtoToRecord(dto: RecordDTO, base64?: string): HistoryRecord {
+  return {
+    id: Number(dto.id),
+    prompt: dto.prompt,
+    model: dto.model,
+    ratio: dto.ratio,
+    pixels: dto.pixels,
+    status: dto.status,
+    base64,
+    favorite: dto.favorite,
+    error: dto.error,
+    projectId: dto.projectId ? Number(dto.projectId) : undefined,
+    createdAt: dto.createdAt ? Date.parse(dto.createdAt) : Date.now(),
+    startedAt: dto.startedAt ? Date.parse(dto.startedAt) : undefined,
+    completedAt: dto.completedAt ? Date.parse(dto.completedAt) : undefined,
+  }
+}
+
+function dtoToProject(dto: { id: string; name: string; createdAt: string }): Project {
+  return {
+    id: Number(dto.id),
+    name: dto.name,
+    createdAt: Date.parse(dto.createdAt),
+  }
+}
+
+// ---- provider ----
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
-
   const stateRef = useRef<AppState>(state)
   useEffect(() => {
     stateRef.current = state
   }, [state])
 
+  // Map record id -> in-flight image blob URL (so we can revoke on unmount/replace).
+  const blobUrlsRef = useRef<Map<number, string>>(new Map())
   useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      getAll<HistoryRecord>("history"),
-      getAll<Project>("projects"),
-    ])
-      .then(async ([history, projects]) => {
-        if (cancelled) return
-        const stale = history.filter(
-          (record) =>
-            record.status === "waiting" || record.status === "running"
-        )
-        const sweptHistory = history.map((record) => {
-          if (record.status === "waiting" || record.status === "running") {
-            return {
-              ...record,
-              status: "failed" as const,
-              error: record.error ?? "页面刷新前未完成",
-              completedAt: record.completedAt ?? Date.now(),
-            }
-          }
-          return record
-        })
-        if (stale.length > 0) {
-          await Promise.all(
-            stale.map((record) =>
-              put<HistoryRecord>("history", {
-                ...record,
-                status: "failed",
-                error: record.error ?? "页面刷新前未完成",
-                completedAt: record.completedAt ?? Date.now(),
-              })
-            )
-          ).catch(() => {})
-        }
-        if (cancelled) return
-        const config = loadConfig()
-        dispatch({ type: "history/load", payload: sweptHistory })
-        dispatch({ type: "projects/load", payload: projects })
-        dispatch({ type: "config/load", payload: config })
-        dispatch({ type: "system/hydrated" })
-      })
-      .catch(() => {
-        if (cancelled) return
-        const config = loadConfig()
-        dispatch({ type: "config/load", payload: config })
-        dispatch({ type: "system/hydrated" })
-      })
+    const urls = blobUrlsRef.current
     return () => {
-      cancelled = true
+      urls.forEach((url) => URL.revokeObjectURL(url))
+      urls.clear()
     }
   }, [])
 
+  // Active polls: record id -> abort flag.
+  const pollersRef = useRef<Set<number>>(new Set())
+
+  useEffect(() => {
+    let cancelled = false
+    async function hydrate() {
+      if (!tokenStorage.read()) {
+        dispatch({ type: "system/hydrated" })
+        return
+      }
+      try {
+        const [records, projects, cfg] = await Promise.all([
+          recordsApi.list({ pageSize: 100 }),
+          projectsApi.list(),
+          appConfigApi.load(),
+        ])
+        if (cancelled) return
+        const list = records.data.records.map((d) => dtoToRecord(d))
+        dispatch({ type: "history/load", payload: list })
+        dispatch({
+          type: "projects/load",
+          payload: projects.map(dtoToProject),
+        })
+        const defaultModel =
+          cfg.enabledModels[0] ?? ""
+        dispatch({
+          type: "config/load",
+          payload: {
+            config: { ...DEFAULT_CONFIG, model: defaultModel },
+            enabledModels: cfg.enabledModels,
+          },
+        })
+        // Hydrate images for completed records.
+        for (const rec of list) {
+          if (rec.status === "completed") {
+            void loadImageFor(rec.id)
+          } else if (rec.status === "waiting" || rec.status === "running") {
+            void startPolling(rec.id)
+          }
+        }
+      } catch (err) {
+        if (cancelled) return
+        // Auth failure leaves auth-provider to redirect; here we just stop hydrating.
+        if (err instanceof ApiError && (err.status === 401 || err.code === "network_error")) {
+          // proceed without data
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn("hydrate failed", err)
+        }
+      } finally {
+        if (!cancelled) dispatch({ type: "system/hydrated" })
+      }
+    }
+    void hydrate()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const loadImageFor = useCallback(async (id: number) => {
+    try {
+      const existing = blobUrlsRef.current.get(id)
+      if (existing) URL.revokeObjectURL(existing)
+      const url = await fetchImageBlobURL(String(id))
+      blobUrlsRef.current.set(id, url)
+      dispatch({ type: "history/update", payload: { id, patch: { base64: url } } })
+    } catch {
+      // best effort
+    }
+  }, [])
+
+  const startPolling = useCallback(
+    (id: number) => {
+      if (pollersRef.current.has(id)) return
+      pollersRef.current.add(id)
+      const tick = async () => {
+        if (!pollersRef.current.has(id)) return
+        try {
+          const dto = await recordsApi.get(String(id))
+          const next = dtoToRecord(dto)
+          dispatch({ type: "history/update", payload: { id, patch: next } })
+          if (dto.status === "completed") {
+            pollersRef.current.delete(id)
+            await loadImageFor(id)
+            return
+          }
+          if (dto.status === "failed") {
+            pollersRef.current.delete(id)
+            return
+          }
+        } catch {
+          // network blip; keep polling
+        }
+        setTimeout(tick, POLL_INTERVAL_MS)
+      }
+      setTimeout(tick, POLL_INTERVAL_MS)
+    },
+    [loadImageFor]
+  )
+
   const addRecord = useCallback<HistoryContextValue["addRecord"]>(
     async ({ prompt, model, ratio, pixels, referenceImages }) => {
-      const draft: Omit<HistoryRecord, "id"> = {
+      const dto = await recordsApi.create({
         prompt,
         model,
         ratio,
         pixels,
-        status: "waiting",
-        favorite: false,
-        createdAt: Date.now(),
-        ...(referenceImages && referenceImages.length > 0
-          ? { referenceImages }
-          : {}),
-      }
-      const id = await add<HistoryRecord>("history", draft)
-      const record: HistoryRecord = { ...draft, id }
-      stateRef.current = {
-        ...stateRef.current,
-        history: [...stateRef.current.history, record],
-      }
+        referenceImages,
+      })
+      const record = dtoToRecord(dto)
+      record.referenceImages = referenceImages
       dispatch({ type: "history/add", payload: record })
+      void startPolling(record.id)
       return record
     },
-    []
+    [startPolling]
   )
 
   const updateRecord = useCallback<HistoryContextValue["updateRecord"]>(
     async (id, patch) => {
-      const current = stateRef.current.history.find((r) => r.id === id)
-      if (!current) return
-      const merged: HistoryRecord = { ...current, ...patch }
-      stateRef.current = {
-        ...stateRef.current,
-        history: stateRef.current.history.map((r) =>
-          r.id === id ? merged : r
-        ),
+      // Only fields the backend supports go through the API.
+      const apiPatch: { favorite?: boolean; projectId?: string | null } = {}
+      if (patch.favorite !== undefined) apiPatch.favorite = patch.favorite
+      if ("projectId" in patch) {
+        apiPatch.projectId =
+          patch.projectId === undefined ? null : String(patch.projectId)
       }
-      await put<HistoryRecord>("history", merged)
+      if (Object.keys(apiPatch).length > 0) {
+        try {
+          await recordsApi.update(String(id), apiPatch)
+        } catch {
+          // surface via toast at call site; still keep optimistic state
+        }
+      }
       dispatch({ type: "history/update", payload: { id, patch } })
     },
     []
@@ -354,42 +432,37 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const deleteRecord = useCallback<HistoryContextValue["deleteRecord"]>(
     async (id) => {
-      stateRef.current = {
-        ...stateRef.current,
-        history: stateRef.current.history.filter((r) => r.id !== id),
-        activeHistoryId:
-          stateRef.current.activeHistoryId === id
-            ? null
-            : stateRef.current.activeHistoryId,
+      try {
+        await recordsApi.remove(String(id))
+      } catch {
+        /* ignore; still drop locally */
       }
-      await del("history", id)
+      const url = blobUrlsRef.current.get(id)
+      if (url) {
+        URL.revokeObjectURL(url)
+        blobUrlsRef.current.delete(id)
+      }
+      pollersRef.current.delete(id)
       dispatch({ type: "history/delete", payload: id })
     },
     []
   )
 
   const getById = useCallback(
-    (id: number) => state.history.find((r) => r.id === id),
-    [state.history]
-  )
-
-  const addProject = useCallback<ProjectsContextValue["addProject"]>(
-    async (name) => {
-      const draft: Omit<Project, "id"> = { name, createdAt: Date.now() }
-      const id = await add<Project>("projects", draft)
-      const project: Project = { ...draft, id }
-      dispatch({ type: "projects/add", payload: project })
-      return project
-    },
+    (id: number) => stateRef.current.history.find((r) => r.id === id),
     []
   )
 
+  const addProject = useCallback<ProjectsContextValue["addProject"]>(async (name) => {
+    const dto = await projectsApi.create(name)
+    const p = dtoToProject(dto)
+    dispatch({ type: "projects/add", payload: p })
+    return p
+  }, [])
+
   const renameProject = useCallback<ProjectsContextValue["renameProject"]>(
     async (id, name) => {
-      const current = stateRef.current.projects.find((p) => p.id === id)
-      if (!current) return
-      const merged: Project = { ...current, name }
-      await put<Project>("projects", merged)
+      await projectsApi.rename(String(id), name)
       dispatch({ type: "projects/rename", payload: { id, name } })
     },
     []
@@ -397,63 +470,52 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const deleteProject = useCallback<ProjectsContextValue["deleteProject"]>(
     async (id) => {
-      const affected = stateRef.current.history.filter(
-        (record) => record.projectId === id
-      )
-      await Promise.all(
-        affected.map((record) =>
-          put<HistoryRecord>("history", { ...record, projectId: undefined })
-        )
-      )
-      await del("projects", id)
+      await projectsApi.remove(String(id))
       dispatch({ type: "projects/delete", payload: id })
     },
     []
   )
 
-  const updateConfig = useCallback<ConfigContextValue["updateConfig"]>(
-    (patch) => {
-      const next: Config = { ...stateRef.current.config, ...patch }
-      saveConfig(next)
-      dispatch({ type: "config/update", payload: patch })
-    },
-    []
-  )
+  const updateConfig = useCallback<ConfigContextValue["updateConfig"]>((patch) => {
+    dispatch({ type: "config/update", payload: patch })
+  }, [])
 
-  const setApiStatus = useCallback<UIContextValue["setApiStatus"]>(
-    (status, errorMessage) => {
-      dispatch({
-        type: "ui/setApiStatus",
-        payload: { status, errorMessage },
-      })
+  const refreshEnabledModels = useCallback<ConfigContextValue["refreshEnabledModels"]>(
+    async () => {
+      try {
+        const cfg = await appConfigApi.load()
+        dispatch({ type: "enabledModels/set", payload: cfg.enabledModels })
+      } catch {
+        /* ignore */
+      }
     },
     []
   )
 
   const testConnection = useCallback<ConfigContextValue["testConnection"]>(
     async () => {
-      const { baseUrl, apiKey } = stateRef.current.config
-      dispatch({
-        type: "ui/setApiStatus",
-        payload: { status: "testing" },
-      })
-      const result = await testConnectionApi({ baseUrl, apiKey })
-      if (result.ok) {
-        dispatch({
-          type: "ui/setApiStatus",
-          payload: { status: "success" },
-        })
+      // 真正的连通性检测由 admin 后台 (POST /api/v1/admin/upstream-configs/test) 完成；
+      // 这里只是兼容旧调用：当前用户拉一次 /config，没报错就视为连通。
+      dispatch({ type: "ui/setApiStatus", payload: { status: "testing" } })
+      try {
+        await appConfigApi.load()
+        dispatch({ type: "ui/setApiStatus", payload: { status: "success" } })
         return true
-      } else {
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "网络异常"
         dispatch({
           type: "ui/setApiStatus",
-          payload: {
-            status: "error",
-            errorMessage: result.classified.title,
-          },
+          payload: { status: "error", errorMessage: message },
         })
         return false
       }
+    },
+    []
+  )
+
+  const setApiStatus = useCallback<UIContextValue["setApiStatus"]>(
+    (status, errorMessage) => {
+      dispatch({ type: "ui/setApiStatus", payload: { status, errorMessage } })
     },
     []
   )
@@ -476,30 +538,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ui/closeLightbox" })
   }, [])
 
-  const setSettingsOpen = useCallback<UIContextValue["setSettingsOpen"]>(
-    (open) => {
-      dispatch({ type: "ui/setSettingsOpen", payload: open })
-    },
-    []
-  )
+  const setSettingsOpen = useCallback<UIContextValue["setSettingsOpen"]>((open) => {
+    dispatch({ type: "ui/setSettingsOpen", payload: open })
+  }, [])
 
   const eventIdRef = useRef(0)
 
-  const appendEvent = useCallback<EventLogContextValue["append"]>(
-    (level, message) => {
-      eventIdRef.current += 1
-      dispatch({
-        type: "events/append",
-        payload: {
-          id: eventIdRef.current,
-          ts: Date.now(),
-          level,
-          message,
-        },
-      })
-    },
-    []
-  )
+  const appendEvent = useCallback<EventLogContextValue["append"]>((level, message) => {
+    eventIdRef.current += 1
+    dispatch({
+      type: "events/append",
+      payload: { id: eventIdRef.current, ts: Date.now(), level, message },
+    })
+  }, [])
 
   const clearEvents = useCallback<EventLogContextValue["clear"]>(() => {
     dispatch({ type: "events/clear" })
@@ -530,10 +581,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const configValue = useMemo<ConfigContextValue>(
     () => ({
       config: state.config,
+      enabledModels: state.enabledModels,
       updateConfig,
+      refreshEnabledModels,
       testConnection,
     }),
-    [state.config, updateConfig, testConnection]
+    [state.config, state.enabledModels, updateConfig, refreshEnabledModels, testConnection]
   )
 
   const uiValue = useMemo<UIContextValue>(
@@ -587,60 +640,32 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   )
 }
 
-function useHistoryContext(): HistoryContextValue {
-  const ctx = useContext(HistoryContext)
-  if (!ctx) {
-    throw new Error("useHistory must be used within AppStateProvider")
-  }
-  return ctx
-}
+// ---- hooks ----
 
-function useProjectsContext(): ProjectsContextValue {
-  const ctx = useContext(ProjectsContext)
-  if (!ctx) {
-    throw new Error("useProjects must be used within AppStateProvider")
-  }
-  return ctx
-}
-
-function useConfigContext(): ConfigContextValue {
-  const ctx = useContext(ConfigContext)
-  if (!ctx) {
-    throw new Error("useConfig must be used within AppStateProvider")
-  }
-  return ctx
-}
-
-function useUIContext(): UIContextValue {
-  const ctx = useContext(UIContext)
-  if (!ctx) {
-    throw new Error("useUI must be used within AppStateProvider")
-  }
-  return ctx
-}
-
-function useEventLogContext(): EventLogContextValue {
-  const ctx = useContext(EventLogContext)
-  if (!ctx) {
-    throw new Error("useEventLog must be used within AppStateProvider")
-  }
-  return ctx
+function ctx<T>(c: React.Context<T | null>, name: string): T {
+  const v = useContext(c)
+  if (!v) throw new Error(`${name} must be used within AppStateProvider`)
+  return v
 }
 
 export function useHistory(): HistoryContextValue {
-  return useHistoryContext()
+  return ctx(HistoryContext, "useHistory")
 }
-
 export function useProjects(): ProjectsContextValue {
-  return useProjectsContext()
+  return ctx(ProjectsContext, "useProjects")
 }
-
 export function useConfig(): ConfigContextValue {
-  return useConfigContext()
+  return ctx(ConfigContext, "useConfig")
+}
+function useUI(): UIContextValue {
+  return ctx(UIContext, "useUI")
+}
+function useEvents(): EventLogContextValue {
+  return ctx(EventLogContext, "useEventLog")
 }
 
 export function useActiveHistory(): [number | null, (id: number | null) => void] {
-  const { activeHistoryId, setActive } = useUIContext()
+  const { activeHistoryId, setActive } = useUI()
   return [activeHistoryId, setActive]
 }
 
@@ -653,7 +678,7 @@ type UseLightboxReturn = {
 }
 
 export function useLightbox(): UseLightboxReturn {
-  const { lightbox, openLightbox, closeLightbox } = useUIContext()
+  const { lightbox, openLightbox, closeLightbox } = useUI()
   return {
     open: lightbox.open,
     recordId: lightbox.recordId,
@@ -663,25 +688,13 @@ export function useLightbox(): UseLightboxReturn {
   }
 }
 
-type UseApiStatusReturn = {
-  status: ApiStatus
-  errorMessage: string
-}
-
-export function useApiStatus(): UseApiStatusReturn {
-  const { apiStatus, apiErrorMessage } = useUIContext()
+export function useApiStatus(): { status: ApiStatus; errorMessage: string } {
+  const { apiStatus, apiErrorMessage } = useUI()
   return { status: apiStatus, errorMessage: apiErrorMessage }
 }
 
-type UseSettingsDialogReturn = {
-  open: boolean
-  openSettings: () => void
-  closeSettings: () => void
-  setOpen: (open: boolean) => void
-}
-
-export function useSettingsDialog(): UseSettingsDialogReturn {
-  const { settingsOpen, setSettingsOpen } = useUIContext()
+export function useSettingsDialog() {
+  const { settingsOpen, setSettingsOpen } = useUI()
   return {
     open: settingsOpen,
     openSettings: useCallback(() => setSettingsOpen(true), [setSettingsOpen]),
@@ -691,7 +704,7 @@ export function useSettingsDialog(): UseSettingsDialogReturn {
 }
 
 export function useEventLog(): EventLogContextValue {
-  return useEventLogContext()
+  return useEvents()
 }
 
 type UseGenerateReturn = {
@@ -707,148 +720,81 @@ type UseGenerateReturn = {
 }
 
 export function useGenerate(): UseGenerateReturn {
-  const { records, addRecord, updateRecord } = useHistoryContext()
-  const { config } = useConfigContext()
-  const { setActive } = useUIContext()
-  const { append: appendEvent, clear: clearEvents } = useEventLogContext()
+  const { records, addRecord } = useHistory()
+  const { config } = useConfig()
+  const { setActive } = useUI()
+  const { append: appendEvent, clear: clearEvents } = useEvents()
 
-  const historyRef = useRef(records)
+  const recordsRef = useRef(records)
   useEffect(() => {
-    historyRef.current = records
+    recordsRef.current = records
   }, [records])
 
-  const configRef = useRef(config)
-  useEffect(() => {
-    configRef.current = config
-  }, [config])
-
-  const updateRecordRef = useRef(updateRecord)
-  useEffect(() => {
-    updateRecordRef.current = updateRecord
-  }, [updateRecord])
-
-  const appendEventRef = useRef(appendEvent)
-  useEffect(() => {
-    appendEventRef.current = appendEvent
-  }, [appendEvent])
-
   const isProcessing = useMemo(
-    () => records.some((record) => record.status === "running"),
+    () =>
+      records.some(
+        (r) => r.status === "running" || r.status === "waiting"
+      ),
     [records]
   )
 
   const waitingCount = useMemo(
-    () => records.filter((record) => record.status === "waiting").length,
+    () => records.filter((r) => r.status === "waiting").length,
     [records]
-  )
-
-  const buildSchedulerDeps = useCallback(
-    () => ({
-      getNextWaiting: () =>
-        historyRef.current.find((r) => r.status === "waiting"),
-      callApi: async (target: HistoryRecord) => {
-        const { baseUrl, apiKey } = configRef.current
-        const { base64 } = await generateImage({
-          baseUrl,
-          apiKey,
-          model: target.model,
-          prompt: target.prompt,
-          ratio: target.ratio,
-          pixels: target.pixels,
-          referenceImages: target.referenceImages,
-          onEvent: (level, message) =>
-            appendEventRef.current(level, message),
-        })
-        return base64
-      },
-      onStart: (id: number) => {
-        appendEventRef.current("info", `开始处理记录 #${id}`)
-        historyRef.current = historyRef.current.map((r) =>
-          r.id === id
-            ? { ...r, status: "running", startedAt: Date.now() }
-            : r
-        )
-        void updateRecordRef.current(id, {
-          status: "running",
-          startedAt: Date.now(),
-        })
-      },
-      onSuccess: (id: number, base64: string) => {
-        appendEventRef.current("done", `生成完成 #${id}`)
-        historyRef.current = historyRef.current.map((r) =>
-          r.id === id
-            ? { ...r, status: "completed", base64, completedAt: Date.now() }
-            : r
-        )
-        void updateRecordRef.current(id, {
-          status: "completed",
-          base64,
-          completedAt: Date.now(),
-        })
-      },
-      onFailure: (id: number, error: string) => {
-        appendEventRef.current("error", `失败 #${id}: ${error}`)
-        historyRef.current = historyRef.current.map((r) =>
-          r.id === id
-            ? { ...r, status: "failed", error, completedAt: Date.now() }
-            : r
-        )
-        void updateRecordRef.current(id, {
-          status: "failed",
-          error,
-          completedAt: Date.now(),
-        })
-      },
-    }),
-    []
   )
 
   const submit = useCallback<UseGenerateReturn["submit"]>(
     async ({ prompt, ratio, pixels, referenceImages }) => {
-      const hasRunning = historyRef.current.some(
-        (record) => record.status === "running"
-      )
-      if (!hasRunning) {
-        clearEvents()
+      if (!config.model) {
+        appendEvent("error", "请先选择模型")
+        return
       }
+      const busy = recordsRef.current.some(
+        (r) => r.status === "running" || r.status === "waiting"
+      )
+      if (!busy) clearEvents()
       appendEvent("info", `提交生成请求: ${prompt.slice(0, 60)}`)
       if (referenceImages && referenceImages.length > 0) {
         appendEvent("info", `附带 ${referenceImages.length} 张参考图`)
       }
-
-      const record = await addRecord({
-        prompt,
-        model: configRef.current.model,
-        ratio,
-        pixels,
-        referenceImages,
-      })
-
-      historyRef.current = [...historyRef.current, record]
-      setActive(record.id)
-
-      startQueue(buildSchedulerDeps())
+      try {
+        const rec = await addRecord({
+          prompt,
+          model: config.model,
+          ratio,
+          pixels,
+          referenceImages,
+        })
+        setActive(rec.id)
+      } catch (err) {
+        const message =
+          err instanceof ApiError ? err.message : "提交失败，请重试"
+        appendEvent("error", message)
+      }
     },
-    [addRecord, setActive, appendEvent, clearEvents, buildSchedulerDeps]
+    [config.model, addRecord, setActive, appendEvent, clearEvents]
   )
 
   const retry = useCallback<UseGenerateReturn["retry"]>(
     async (id) => {
-      const target = historyRef.current.find((r) => r.id === id)
+      const target = recordsRef.current.find((r) => r.id === id)
       if (!target) return
-      clearEvents()
-      appendEvent("info", `重试记录 #${id}`)
-
-      historyRef.current = historyRef.current.map((r) =>
-        r.id === id
-          ? { ...r, status: "waiting", error: undefined }
-          : r
-      )
-      setActive(id)
-      await updateRecord(id, { status: "waiting", error: undefined })
-      startQueue(buildSchedulerDeps())
+      appendEvent("info", `重试记录 #${id}（创建新任务）`)
+      try {
+        const rec = await addRecord({
+          prompt: target.prompt,
+          model: target.model,
+          ratio: target.ratio,
+          pixels: target.pixels,
+          referenceImages: target.referenceImages,
+        })
+        setActive(rec.id)
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "重试失败"
+        appendEvent("error", message)
+      }
     },
-    [updateRecord, setActive, appendEvent, clearEvents, buildSchedulerDeps]
+    [addRecord, setActive, appendEvent]
   )
 
   return { submit, retry, isProcessing, waitingCount }

@@ -6,23 +6,19 @@ import { AnimatePresence, motion } from "motion/react"
 import {
   Check,
   ChevronsUpDown,
-  CircleAlert,
   CircleUser,
   KeyRound,
-  Loader2,
-  RefreshCw,
   Search,
   Settings,
   Sparkles,
 } from "lucide-react"
 
-import { useApiStatus, useConfig } from "@/app/providers/app-state-provider"
+import { useConfig } from "@/app/providers/app-state-provider"
 import { useAuth } from "@/app/providers/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { PasswordInput } from "@/components/password-input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   DropdownMenu,
@@ -32,7 +28,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useMotionVariants } from "@/lib/motion"
 import { cn } from "@/lib/utils"
-import type { ApiStatus } from "@/components/workbench/types"
 import { modelOptions } from "@/lib/api/models"
 
 type SectionId = "account" | "general" | "api"
@@ -151,96 +146,76 @@ function SettingsSubNav({
 }
 
 function ApiConnectionSection() {
-  const { config, updateConfig, testConnection } = useConfig()
-  const { status: apiStatus, errorMessage } = useApiStatus()
+  const { config, updateConfig, enabledModels } = useConfig()
   const [modelOpen, setModelOpen] = React.useState(false)
 
-  const handleTestConnection = React.useCallback(async () => {
-    const connected = await testConnection()
-    if (connected) {
-      toast.success("连接测试通过")
-    } else {
-      toast.error("连接测试失败")
+  const choices = React.useMemo(() => {
+    // 优先展示 admin 启用的模型；如果列表为空，回退到内置 modelOptions（避免初次配置前完全无选项）
+    if (enabledModels.length > 0) {
+      return enabledModels.map(
+        (value) =>
+          modelOptions.find((o) => o.value === value) ?? { value, label: value }
+      )
     }
-  }, [testConnection])
+    return []
+  }, [enabledModels])
 
   return (
     <div className="grid gap-6">
-      <h2 className="text-lg font-semibold tracking-tight">API 连接</h2>
+      <h2 className="text-lg font-semibold tracking-tight">生图接口</h2>
 
       <div className="grid gap-3">
         <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          连接信息
+          模型
         </h3>
         <Card className="gap-0 py-0">
           <div className="divide-y">
-            <SettingRow label="Base URL" description="生图服务的访问域名">
-              <Input
-                type="url"
-                inputMode="url"
-                autoComplete="off"
-                spellCheck={false}
-                className="w-64"
-                value={config.baseUrl}
-                onChange={(event) =>
-                  updateConfig({ baseUrl: event.target.value })
-                }
-                placeholder="https://..."
-              />
-            </SettingRow>
             <SettingRow
-              label="API Key"
-              description="服务认证凭据,仅保存在本地"
+              label="启用模型"
+              description="上游接口与凭据由管理员统一配置"
             >
-              <PasswordInput
-                autoComplete="off"
-                spellCheck={false}
-                className="w-64"
-                value={config.apiKey}
-                onChange={(event) =>
-                  updateConfig({ apiKey: event.target.value })
-                }
-                placeholder="sk-..."
-              />
-            </SettingRow>
-            <SettingRow label="模型" description="调用的默认模型 ID">
-              <DropdownMenu open={modelOpen} onOpenChange={setModelOpen}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={modelOpen}
-                    className="w-64 justify-between font-normal"
-                  >
-                    {config.model ? (
-                      modelOptions.find(
-                        (option) => option.value === config.model
-                      )?.label ?? config.model
-                    ) : (
-                      <span className="text-muted-foreground">选择模型</span>
-                    )}
-                    <ChevronsUpDown className="opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-64" align="end">
-                  {modelOptions.map((option) => (
-                    <DropdownMenuItem
-                      key={option.value}
-                      onSelect={() => updateConfig({ model: option.value })}
+              {choices.length === 0 ? (
+                <div className="w-64 rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  暂无可用模型，请联系管理员
+                </div>
+              ) : (
+                <DropdownMenu open={modelOpen} onOpenChange={setModelOpen}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={modelOpen}
+                      className="w-64 justify-between font-normal"
                     >
-                      <span>{option.label}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          config.model === option.value
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                      {config.model ? (
+                        choices.find((o) => o.value === config.model)?.label ??
+                        config.model
+                      ) : (
+                        <span className="text-muted-foreground">选择模型</span>
+                      )}
+                      <ChevronsUpDown className="opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-64" align="end">
+                    {choices.map((option) => (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onSelect={() => updateConfig({ model: option.value })}
+                      >
+                        <span>{option.label}</span>
+                        <Check
+                          className={cn(
+                            "ml-auto",
+                            config.model === option.value
+                              ? "opacity-100"
+                              : "opacity-0"
+                          )}
+                        />
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </SettingRow>
           </div>
         </Card>
@@ -248,32 +223,17 @@ function ApiConnectionSection() {
 
       <div className="grid gap-3">
         <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          连接测试
+          上游连接
         </h3>
         <Card className="gap-0 py-0">
-          <div className="divide-y">
-            <SettingRow
-              label="测试连接"
-              description="校验当前 Base URL 与 API Key 是否可达"
-            >
-              <Button
-                type="button"
-                variant="outline"
-                className="w-28"
-                disabled={apiStatus === "testing"}
-                onClick={handleTestConnection}
-              >
-                {apiStatus === "testing" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                {apiStatus === "testing" ? "测试中" : "测试连接"}
-              </Button>
-            </SettingRow>
-            <div className="px-4 py-4">
-              <ApiStatusCard status={apiStatus} errorMessage={errorMessage} />
-            </div>
+          <div className="px-4 py-4 text-xs text-muted-foreground">
+            <p>
+              生图请求的 Base URL 与 API Key 由管理员统一配置，普通用户无法查看或修改。
+            </p>
+            <p className="mt-1">
+              如果生成持续失败，请通知管理员在<span className="font-medium"> 后台 → 上游配置 </span>
+              检查连通性。
+            </p>
           </div>
         </Card>
       </div>
@@ -432,98 +392,6 @@ function SettingRow({
         ) : null}
       </div>
       <div className="shrink-0">{children}</div>
-    </div>
-  )
-}
-
-function ApiStatusCard({
-  status,
-  errorMessage,
-}: {
-  status: ApiStatus
-  errorMessage: string
-}) {
-  const { fadeInUp } = useMotionVariants()
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={status}
-        variants={fadeInUp}
-        initial="hidden"
-        animate="show"
-        exit="exit"
-      >
-        <ApiStatusCardContent status={status} errorMessage={errorMessage} />
-      </motion.div>
-    </AnimatePresence>
-  )
-}
-
-function ApiStatusCardContent({
-  status,
-  errorMessage,
-}: {
-  status: ApiStatus
-  errorMessage: string
-}) {
-  if (status === "success") {
-    return (
-      <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 dark:border-green-900/70 dark:bg-green-950/30 dark:text-green-300">
-        <div className="flex items-start gap-2">
-          <Check className="mt-0.5 size-4" />
-          <div>
-            <p className="text-sm font-medium">连接可用</p>
-            <p className="text-xs opacity-80">当前配置已通过连接测试。</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-  if (status === "testing") {
-    return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
-        <div className="flex items-start gap-2">
-          <Loader2 className="mt-0.5 size-4 animate-spin" />
-          <div>
-            <p className="text-sm font-medium">正在测试</p>
-            <p className="text-xs opacity-80">
-              正在校验当前 Base URL 和 API Key。
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-  if (status === "error") {
-    return (
-      <div
-        className={cn(
-          "rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-destructive"
-        )}
-      >
-        <div className="flex items-start gap-2">
-          <CircleAlert className="mt-0.5 size-4" />
-          <div>
-            <p className="text-sm font-medium">连接失败</p>
-            <p className="text-xs opacity-80">
-              {errorMessage || "请检查 Base URL 与 API Key 后重试"}
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div className="rounded-lg border border-border bg-muted/40 p-3 text-muted-foreground">
-      <div className="flex items-start gap-2">
-        <KeyRound className="mt-0.5 size-4" />
-        <div>
-          <p className="text-sm font-medium">未测试</p>
-          <p className="text-xs opacity-80">
-            保存或使用前建议先测试当前配置。
-          </p>
-        </div>
-      </div>
     </div>
   )
 }
