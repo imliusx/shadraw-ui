@@ -49,8 +49,8 @@ export function AppHeader() {
   const { user, logout } = useAuth()
   const { slideInDown } = useMotionVariants()
 
-  function handleLogout() {
-    logout()
+  async function handleLogout() {
+    await logout()
     toast.info("已退出登录")
     router.replace("/login")
   }

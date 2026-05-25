@@ -39,7 +39,7 @@ function validateEmail(value: string): string | null {
 }
 
 function validatePassword(value: string): string | null {
-  return value.length >= 6 ? null : "密码至少 6 位"
+  return value.length >= 8 ? null : "密码至少 8 位"
 }
 
 function runValidation(values: { email: string; password: string }): FieldErrors {

@@ -4,14 +4,20 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react"
 
-const ERROR_TRIGGER = /^error@|fail/i
-const MOCK_LATENCY_MS = 600
-const ERROR_MESSAGE = "登录失败，请检查邮箱与密码"
+import {
+  AuthError,
+  authApi,
+  type AuthUser as ApiAuthUser,
+  type LoginPayload,
+  type RegisterPayload,
+} from "@/lib/api/auth-client"
+import { tokenStorage } from "@/lib/api/auth-storage"
 
 export type AuthUser = {
   id: string
@@ -22,88 +28,108 @@ export type AuthUser = {
 
 export type AuthStatus = "idle" | "submitting" | "error"
 
-export type LoginInput = {
-  email: string
-  password: string
-}
-
-export type RegisterInput = {
-  email: string
-  password: string
-  displayName: string
-}
+export type LoginInput = LoginPayload
+export type RegisterInput = RegisterPayload
 
 type AuthContextValue = {
   user: AuthUser | null
   status: AuthStatus
   error: string | null
+  isInitializing: boolean
   login: (input: LoginInput) => Promise<boolean>
   register: (input: RegisterInput) => Promise<boolean>
-  logout: () => void
+  logout: () => Promise<void>
   clearError: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-function randomId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID()
+function toUser(api: ApiAuthUser): AuthUser {
+  const localPart = api.email.split("@")[0] || api.email
+  return {
+    id: api.id,
+    email: api.email,
+    displayName: api.displayName || localPart,
+    avatarSeed: api.displayName || localPart,
   }
-  return Math.random().toString(36).slice(2)
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function messageFromError(err: unknown): string {
+  if (err instanceof AuthError) {
+    if (err.fields) {
+      const first = Object.values(err.fields)[0]
+      if (first) return first
+    }
+    return err.message
+  }
+  if (err instanceof Error) return err.message
+  return "未知错误"
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [status, setStatus] = useState<AuthStatus>("idle")
   const [error, setError] = useState<string | null>(null)
+  const [isInitializing, setIsInitializing] = useState(true)
 
-  const login = useCallback(async ({ email, password: _password }: LoginInput): Promise<boolean> => {
-    setStatus("submitting")
-    setError(null)
-    await sleep(MOCK_LATENCY_MS)
-    if (ERROR_TRIGGER.test(email)) {
-      setStatus("error")
-      setError(ERROR_MESSAGE)
-      return false
+  // Restore session on mount: if a refresh token exists, try GET /auth/me.
+  useEffect(() => {
+    let cancelled = false
+    async function restore() {
+      const tokens = tokenStorage.read()
+      if (!tokens) {
+        setIsInitializing(false)
+        return
+      }
+      try {
+        const me = await authApi.me()
+        if (cancelled) return
+        setUser(toUser(me))
+      } catch {
+        // 401 or other: invalid session, drop tokens
+        tokenStorage.clear()
+      } finally {
+        if (!cancelled) setIsInitializing(false)
+      }
     }
-    const localPart = email.split("@")[0] || email
-    setUser({
-      id: randomId(),
-      email,
-      displayName: localPart,
-      avatarSeed: localPart,
-    })
-    setStatus("idle")
-    return true
+    void restore()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  const register = useCallback(
-    async ({ email, password: _password, displayName }: RegisterInput): Promise<boolean> => {
-      setStatus("submitting")
-      setError(null)
-      await sleep(MOCK_LATENCY_MS)
-      if (ERROR_TRIGGER.test(email)) {
-        setStatus("error")
-        setError(ERROR_MESSAGE)
-        return false
-      }
-      setUser({
-        id: randomId(),
-        email,
-        displayName,
-        avatarSeed: displayName,
-      })
+  const login = useCallback(async (input: LoginInput): Promise<boolean> => {
+    setStatus("submitting")
+    setError(null)
+    try {
+      const resp = await authApi.login(input)
+      setUser(toUser(resp.user))
       setStatus("idle")
       return true
-    },
-    []
-  )
+    } catch (err) {
+      setStatus("error")
+      setError(messageFromError(err))
+      return false
+    }
+  }, [])
 
-  const logout = useCallback(() => {
+  const register = useCallback(async (input: RegisterInput): Promise<boolean> => {
+    setStatus("submitting")
+    setError(null)
+    try {
+      const resp = await authApi.register(input)
+      setUser(toUser(resp.user))
+      setStatus("idle")
+      return true
+    } catch (err) {
+      setStatus("error")
+      setError(messageFromError(err))
+      return false
+    }
+  }, [])
+
+  const logout = useCallback(async () => {
+    await authApi.logout()
     setUser(null)
     setStatus("idle")
     setError(null)
@@ -115,8 +141,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, error, login, register, logout, clearError }),
-    [user, status, error, login, register, logout, clearError]
+    () => ({
+      user,
+      status,
+      error,
+      isInitializing,
+      login,
+      register,
+      logout,
+      clearError,
+    }),
+    [user, status, error, isInitializing, login, register, logout, clearError]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

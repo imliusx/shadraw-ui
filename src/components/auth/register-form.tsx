@@ -54,7 +54,7 @@ function validateEmail(value: string): string | null {
 }
 
 function validatePassword(value: string): string | null {
-  return value.length >= 6 ? null : "密码至少 6 位"
+  return value.length >= 8 ? null : "密码至少 8 位"
 }
 
 function validateConfirmPassword(value: string, password: string): string | null {
@@ -206,7 +206,7 @@ export function RegisterForm() {
               {fieldError("password") ? (
                 <FieldError>{fieldError("password")}</FieldError>
               ) : (
-                <FieldDescription>至少 6 位</FieldDescription>
+                <FieldDescription>至少 8 位</FieldDescription>
               )}
             </Field>
             <Field>
