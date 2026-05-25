@@ -5,6 +5,11 @@ import { AnimatePresence, motion } from "motion/react"
 import { ImagePlus, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useMotionVariants } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 
@@ -69,14 +74,14 @@ export function ReferenceImageUploader({
             style={{ zIndex: values.length - index }}
             className={cn(
               "group relative transition-transform hover:!z-50",
-              index > 0 && "-ml-2"
+              index > 0 && "-ml-2.5"
             )}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={dataUrl}
               alt={`参考图 ${index + 1}`}
-              className="size-7 rounded-md border bg-background object-cover transition-transform group-hover:scale-110"
+              className="size-8 rounded-md border bg-background object-cover transition-transform group-hover:scale-110"
             />
             <button
               type="button"
@@ -96,18 +101,23 @@ export function ReferenceImageUploader({
           variants={scaleFade}
           initial="hidden"
           animate="show"
-          className={cn("relative", values.length > 0 && "-ml-2")}
+          className={cn("relative", values.length > 0 && "ml-0.5")}
         >
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            onClick={onPick}
-            disabled={disabled}
-            aria-label="添加参考图"
-          >
-            <ImagePlus className="size-4" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={onPick}
+                disabled={disabled}
+                aria-label="添加参考图"
+              >
+                <ImagePlus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">添加参考图</TooltipContent>
+          </Tooltip>
         </motion.div>
       ) : null}
     </div>

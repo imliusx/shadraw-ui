@@ -22,11 +22,6 @@ import {
 } from "@/app/providers/app-state-provider"
 import { Button } from "@/components/ui/button"
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -201,11 +196,11 @@ function FailedState({
 }) {
   const errorText = record.error ?? "请求失败"
   return (
-    <div className="flex w-full max-w-md flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-muted/20 px-4 py-8 text-center">
+    <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-muted/20 p-6 text-center">
       <CircleAlert className="size-5 text-destructive" />
       <p className="text-sm font-medium">{errorText}</p>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button size="sm" onClick={onRetry}>
+        <Button size="sm" className="hover:bg-primary/80" onClick={onRetry}>
           <RefreshCw className="size-4" />
           重试
         </Button>
@@ -214,18 +209,6 @@ function FailedState({
           复用提示词
         </Button>
       </div>
-      <Collapsible className="w-full">
-        <CollapsibleTrigger asChild>
-          <Button variant="ghost" size="sm" className="w-full">
-            查看原始错误
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-2">
-          <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 text-left text-xs whitespace-pre-wrap break-words text-muted-foreground">
-            {errorText}
-          </pre>
-        </CollapsibleContent>
-      </Collapsible>
     </div>
   )
 }

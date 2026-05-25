@@ -10,10 +10,10 @@ import {
   Clock3,
   Copy,
   FolderInput,
+  Forward,
   History,
   ImageIcon,
   Inbox,
-  MoreHorizontal,
   PanelLeft,
   Pencil,
   Plus,
@@ -21,7 +21,6 @@ import {
   Search,
   Star,
   Trash2,
-  WandSparkles,
   X,
 } from "lucide-react"
 
@@ -56,9 +55,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
@@ -573,16 +569,24 @@ function HistoryCard({
       animate="show"
       exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.18 } }}
       className={cn(
-        "group/history relative flex w-full min-w-0 items-start gap-3 rounded-lg border p-2.5 text-left transition hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active && "bg-accent text-accent-foreground"
+        "group/history relative grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border p-2.5 text-left transition hover:bg-accent hover:text-accent-foreground",
+        active &&
+          "border-primary/20 bg-primary/5 text-foreground shadow-sm hover:bg-primary/5 dark:border-border dark:bg-accent dark:text-accent-foreground dark:shadow-none dark:hover:bg-accent"
       )}
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none"
+        className="row-span-2 self-start rounded-lg focus-visible:outline-none"
         onClick={() => onSelect(record)}
+        aria-label="选择历史记录"
       >
         <HistoryThumbnail record={record} />
+      </button>
+      <button
+        type="button"
+        className="min-w-0 text-left focus-visible:outline-none"
+        onClick={() => onSelect(record)}
+      >
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex items-center gap-2 pr-20 text-xs text-muted-foreground">
             <span className="truncate">
@@ -592,108 +596,155 @@ function HistoryCard({
           <p className="truncate text-sm font-medium leading-5">
             {record.prompt || "(无提示词)"}
           </p>
-          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <StatusBadge status={record.status} />
-            <span className="truncate">{formatRelativeTime(record.createdAt)}</span>
-          </div>
         </div>
       </button>
-      <div className="pointer-events-none absolute right-2 top-2 flex translate-y-[-0.25rem] items-center gap-0.5 rounded-md bg-background/95 p-0.5 opacity-0 shadow-sm ring-1 ring-border backdrop-blur transition group-hover/history:pointer-events-auto group-hover/history:translate-y-0 group-hover/history:opacity-100 group-focus-within/history:pointer-events-auto group-focus-within/history:translate-y-0 group-focus-within/history:opacity-100 dark:bg-background/90">
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={(event) => event.stopPropagation()}
-                  aria-label="更多操作"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent>更多操作</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent
-            align="end"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <DropdownMenuItem onSelect={() => onReuse(record)}>
-              <WandSparkles className="size-4" />
-              复用提示词
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => onCopyPrompt(record)}>
-              <Copy className="size-4" />
-              复制提示词
-            </DropdownMenuItem>
-            {record.status === "failed" ? (
-              <DropdownMenuItem onSelect={() => onRetry(record)}>
-                <RefreshCw className="size-4" />
-                重试
-              </DropdownMenuItem>
-            ) : null}
-            {record.status === "completed" ? (
-              <>
-                <DropdownMenuItem onSelect={() => onToggleFavorite(record)}>
-                  <Star
-                    className={cn(
-                      "size-4",
-                      record.favorite && "fill-amber-400 text-amber-400"
-                    )}
-                  />
-                  {record.favorite ? "取消收藏" : "加入收藏"}
-                </DropdownMenuItem>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    <FolderInput className="size-4" />
-                    移到项目
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem
-                      onSelect={() => onMoveToProject(record, undefined)}
-                    >
-                      <Inbox className="size-4" />
-                      未分类
-                    </DropdownMenuItem>
-                    {projects.length > 0 ? <DropdownMenuSeparator /> : null}
-                    {projects.map((project) => (
-                      <DropdownMenuItem
-                        key={project.id}
-                        onSelect={() => onMoveToProject(record, project.id)}
-                      >
-                        <Archive className="size-4" />
-                        {project.name}
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={onRequestCreateProject}>
-                      <Plus className="size-4" />
-                      新建项目
-                    </DropdownMenuItem>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              </>
-            ) : null}
-            <DropdownMenuSeparator />
-            {record.status === "waiting" ? (
-              <DropdownMenuItem onSelect={() => onCancelWaiting(record)}>
-                <X className="size-4" />
-                取消
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={() => onRequestDelete(record)}
-              >
-                <Trash2 className="size-4" />
-                删除
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+      <div className="pointer-events-none absolute right-2 top-2">
+        <StatusBadge status={record.status} />
+      </div>
+      <div className="col-start-2 flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+        <HistoryCardActions
+          record={record}
+          projects={projects}
+          onReuse={onReuse}
+          onCopyPrompt={onCopyPrompt}
+          onRetry={onRetry}
+          onToggleFavorite={onToggleFavorite}
+          onMoveToProject={onMoveToProject}
+          onRequestCreateProject={onRequestCreateProject}
+          onCancelWaiting={onCancelWaiting}
+          onRequestDelete={onRequestDelete}
+        />
+        <span className="shrink-0 truncate">
+          {formatRelativeTime(record.createdAt)}
+        </span>
       </div>
     </motion.div>
+  )
+}
+
+function HistoryCardActions({
+  record,
+  projects,
+  onReuse,
+  onCopyPrompt,
+  onRetry,
+  onToggleFavorite,
+  onMoveToProject,
+  onRequestCreateProject,
+  onCancelWaiting,
+  onRequestDelete,
+}: Pick<
+  HistoryCardProps,
+  | "record"
+  | "projects"
+  | "onReuse"
+  | "onCopyPrompt"
+  | "onRetry"
+  | "onToggleFavorite"
+  | "onMoveToProject"
+  | "onRequestCreateProject"
+  | "onCancelWaiting"
+  | "onRequestDelete"
+>) {
+  return (
+    <div className="-ml-1.5 flex min-w-0 items-center gap-px">
+      <TooltipIcon
+        label="复用提示词"
+        onClick={() => onReuse(record)}
+        size="icon-sm"
+      >
+        <Forward className="size-3.5" />
+      </TooltipIcon>
+      <TooltipIcon
+        label="复制提示词"
+        onClick={() => onCopyPrompt(record)}
+        size="icon-sm"
+      >
+        <Copy className="size-3.5" />
+      </TooltipIcon>
+      {record.status === "failed" ? (
+        <TooltipIcon
+          label="重试"
+          onClick={() => onRetry(record)}
+          size="icon-sm"
+        >
+          <RefreshCw className="size-3.5" />
+        </TooltipIcon>
+      ) : null}
+      {record.status === "completed" ? (
+        <>
+          <TooltipIcon
+            label={record.favorite ? "取消收藏" : "加入收藏"}
+            onClick={() => onToggleFavorite(record)}
+            size="icon-sm"
+          >
+            <Star
+              className={cn(
+                "size-3.5",
+                record.favorite && "fill-amber-400 text-amber-400"
+              )}
+            />
+          </TooltipIcon>
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="移到项目"
+                  >
+                    <FolderInput className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>移到项目</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                onSelect={() => onMoveToProject(record, undefined)}
+              >
+                <Inbox className="size-4" />
+                未分类
+              </DropdownMenuItem>
+              {projects.length > 0 ? <DropdownMenuSeparator /> : null}
+              {projects.map((project) => (
+                <DropdownMenuItem
+                  key={project.id}
+                  onSelect={() => onMoveToProject(record, project.id)}
+                >
+                  <Archive className="size-4" />
+                  {project.name}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onRequestCreateProject}>
+                <Plus className="size-4" />
+                新建项目
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      ) : null}
+      {record.status === "waiting" || record.status === "running" ? (
+        <TooltipIcon
+          label="取消"
+          onClick={() => onCancelWaiting(record)}
+          size="icon-sm"
+        >
+          <X className="size-3.5" />
+        </TooltipIcon>
+      ) : (
+        <TooltipIcon
+          label="删除"
+          onClick={() => onRequestDelete(record)}
+          size="icon-sm"
+        >
+          <Trash2 className="size-3.5" />
+        </TooltipIcon>
+      )}
+    </div>
   )
 }
 
@@ -706,12 +757,6 @@ function HistoryThumbnail({ record }: { record: HistoryRecord }) {
           alt=""
           className="size-full object-cover"
         />
-        {record.favorite ? (
-          <Star
-            aria-label="已收藏"
-            className="pointer-events-none absolute right-0.5 top-0.5 size-3 fill-amber-400 text-amber-400"
-          />
-        ) : null}
       </div>
     )
   }
@@ -892,17 +937,19 @@ function TooltipIcon({
   disabled,
   onClick,
   size = "icon-xs",
+  variant = "ghost",
 }: {
   children: React.ReactNode
   label: string
   disabled?: boolean
   onClick: React.MouseEventHandler<HTMLButtonElement>
   size?: React.ComponentProps<typeof Button>["size"]
+  variant?: React.ComponentProps<typeof Button>["variant"]
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button size={size} variant="ghost" disabled={disabled} onClick={onClick}>
+        <Button size={size} variant={variant} disabled={disabled} onClick={onClick}>
           {children}
         </Button>
       </TooltipTrigger>

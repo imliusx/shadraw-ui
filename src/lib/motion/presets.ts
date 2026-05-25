@@ -120,3 +120,4 @@ export const popIn: Variants = {
     transition: { duration: 0.32, ease: easings.emphasized },
   },
 }
+

@@ -2,31 +2,46 @@
 
 import * as React from "react"
 import { motion } from "motion/react"
+import { toast } from "sonner"
 import {
+  ArrowUp,
+  BadgeCheck,
+  Check,
   Eraser,
   Hourglass,
+  Images,
   Loader2,
-  Minus,
-  PanelRight,
-  Plus,
-  Settings2,
-  WandSparkles,
+  SlidersHorizontal,
 } from "lucide-react"
+import { Codex, OpenAI } from "@lobehub/icons"
 
 import {
   useConfig,
   useGenerate,
-  useSettingsDialog,
 } from "@/app/providers/app-state-provider"
-import { Button } from "@/components/ui/button"
-import { ButtonGroup } from "@/components/ui/button-group"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useMotionVariants } from "@/lib/motion"
 import { cn } from "@/lib/utils"
+import {
+  RESPONSE_IMAGE_MODEL,
+  modelOptions,
+} from "@/lib/api/models"
 
 import { pixelOptions, ratios, countOptions } from "./data"
 import {
@@ -35,6 +50,17 @@ import {
 } from "./reference-image-uploader"
 
 const MAX_REFERENCE_IMAGES = 4
+
+type ModelIconComponent = React.ComponentType<{ size?: number | string }>
+
+function getModelIcon(value: string | undefined): ModelIconComponent {
+  switch (value) {
+    case RESPONSE_IMAGE_MODEL:
+      return Codex
+    default:
+      return OpenAI
+  }
+}
 
 type ControlPanelProps = {
   prompt: string
@@ -61,10 +87,9 @@ export function ControlPanel({
   referenceImages,
   setReferenceImages,
 }: ControlPanelProps) {
-  const { config } = useConfig()
+  const { config, updateConfig } = useConfig()
   const { submit, isProcessing, waitingCount } = useGenerate()
-  const { openSettings } = useSettingsDialog()
-  const { slideInRight } = useMotionVariants()
+  const { fadeInUp } = useMotionVariants()
 
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = React.useState(false)
@@ -112,6 +137,7 @@ export function ControlPanel({
   const handleGenerate = React.useCallback(() => {
     if (prompt.trim().length === 0) return
     void submit({ prompt, ratio, pixels, referenceImages })
+    toast.info("已提交生成任务")
   }, [prompt, ratio, pixels, referenceImages, submit])
 
   const apiConfigured =
@@ -120,56 +146,38 @@ export function ControlPanel({
   const generateDisabled =
     prompt.trim().length === 0 || !apiConfigured
 
+  const selectedModelLabel = config.model
+    ? modelOptions.find((option) => option.value === config.model)?.label ??
+      config.model
+    : "未配置"
+  const selectedRatioLabel = ratio === "auto" ? "自动" : ratio
+  const selectedCountLabel = `${count} 张`
+
   return (
-    <motion.aside
-      variants={slideInRight}
+    <motion.section
+      variants={fadeInUp}
       initial="hidden"
       animate="show"
-      className="flex h-full min-w-0 flex-col"
+      className="flex h-full min-w-0 flex-col overflow-hidden"
     >
-      <div className="flex h-12 shrink-0 items-center justify-between px-4">
-        <div className="flex items-center gap-2">
-          <Settings2 className="size-4 text-muted-foreground" />
-          <p className="text-sm font-medium">参数控制</p>
-        </div>
-        <Button size="icon-sm" variant="ghost">
-          <PanelRight className="size-4" />
-        </Button>
-      </div>
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="grid gap-6 px-4 pb-4 pt-2">
-          <div className="grid gap-3">
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="prompt">提示词</Label>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={prompt.length === 0}
-                aria-label="清空提示词"
-                onClick={() => setPrompt("")}
-              >
-                <Eraser className="size-4" />
-              </Button>
-            </div>
-            <div
-              className={cn(
-                "flex h-44 min-h-36 flex-col overflow-hidden rounded-lg border border-input bg-transparent transition-colors resize-y dark:bg-input/30",
-                "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
-                referenceError && "border-destructive ring-3 ring-destructive/20",
-                dragOver && "border-ring bg-accent/40"
-              )}
-              onDragOver={(event) => {
-                if (!Array.from(event.dataTransfer.types).includes("Files")) return
-                event.preventDefault()
-                setDragOver(true)
-              }}
-              onDragLeave={(event) => {
-                if (event.currentTarget.contains(event.relatedTarget as Node)) return
-                setDragOver(false)
-              }}
-              onDrop={(event) => {
+      <div className="mx-auto flex min-h-0 w-2/3 flex-1 flex-col gap-3 px-4 pb-4 pt-4">
+        <div
+          className={cn(
+            "relative flex min-h-20 flex-1 flex-col overflow-hidden rounded-lg border border-input bg-transparent transition-colors dark:bg-input/30",
+            "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+            referenceError && "border-destructive ring-3 ring-destructive/20",
+            dragOver && "border-ring bg-accent/40"
+          )}
+          onDragOver={(event) => {
+            if (!Array.from(event.dataTransfer.types).includes("Files")) return
+            event.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={(event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node)) return
+            setDragOver(false)
+          }}
+          onDrop={(event) => {
                 event.preventDefault()
                 setDragOver(false)
                 const files = event.dataTransfer.files
@@ -183,39 +191,163 @@ export function ControlPanel({
                 className="field-sizing-fixed min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent px-3 pb-3 pt-2.5 shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
                 placeholder="描述你想生成的图片..."
               />
-              <div className="flex items-center justify-between gap-2 px-2 pb-2 pt-2">
-                <div className="flex min-w-0 items-center gap-2">
+              <div className="flex items-center gap-2 px-2 pb-2 pt-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
                   <ReferenceImageUploader
                     values={referenceImages}
                     onRemove={handleRemoveReference}
                     onPick={openPicker}
                     max={MAX_REFERENCE_IMAGES}
                   />
-                  <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    {config.model ? (
-                      <span className="truncate">{config.model}</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={openSettings}
-                        className="shrink-0 text-primary underline-offset-2 hover:underline"
+                  <IconParam
+                    icon={React.createElement(getModelIcon(config.model), {
+                      size: 16,
+                    })}
+                    ariaLabel="选择模型"
+                    tooltip={`模型: ${selectedModelLabel}`}
+                  >
+                    {modelOptions.map((option) => {
+                      const ModelIcon = getModelIcon(option.value)
+                      return (
+                        <DropdownMenuItem
+                          key={option.value}
+                          onSelect={() =>
+                            updateConfig({ model: option.value })
+                          }
+                        >
+                          <ModelIcon size={16} />
+                          <span>{option.label}</span>
+                          <Check
+                            className={cn(
+                              "ml-auto",
+                              config.model === option.value
+                                ? "opacity-100"
+                                : "opacity-0"
+                            )}
+                          />
+                        </DropdownMenuItem>
+                      )
+                    })}
+                  </IconParam>
+                  <IconParam
+                    icon={<SlidersHorizontal />}
+                    ariaLabel="选择图片参数"
+                    tooltip={`参数: ${selectedRatioLabel} · ${pixels}`}
+                  >
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>图片比例</DropdownMenuLabel>
+                      {ratios.map((item) => (
+                        <DropdownMenuItem
+                          key={item.label}
+                          onSelect={() => setRatio(item.label)}
+                        >
+                          <RatioIcon ratio={item.label} active={false} />
+                          <span>{item.label}</span>
+                          <Check
+                            className={cn(
+                              "ml-auto",
+                              ratio === item.label
+                                ? "opacity-100"
+                                : "opacity-0"
+                            )}
+                          />
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuGroup>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>图片像素</DropdownMenuLabel>
+                      {pixelOptions.map((item) => (
+                        <DropdownMenuItem
+                          key={item}
+                          onSelect={() => setPixels(item)}
+                        >
+                          <span>{item}</span>
+                          <Check
+                            className={cn(
+                              "ml-auto",
+                              pixels === item ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuGroup>
+                  </IconParam>
+                  <IconParam
+                    icon={<Images />}
+                    ariaLabel="选择图片数量"
+                    tooltip={`数量: ${selectedCountLabel}`}
+                  >
+                    {countOptions.map((value) => (
+                      <DropdownMenuItem
+                        key={value}
+                        onSelect={() => setCount(value)}
                       >
-                        未配置模型 →
-                      </button>
-                    )}
-                    <span aria-hidden="true" className="shrink-0 text-muted-foreground/40">
-                      ·
-                    </span>
-                    <span className="shrink-0">{ratio}</span>
-                    <span aria-hidden="true" className="shrink-0 text-muted-foreground/40">
-                      ·
-                    </span>
-                    <span className="shrink-0">{pixels}</span>
-                  </div>
+                        <span>{value} 张</span>
+                        <Check
+                          className={cn(
+                            "ml-auto",
+                            count === value ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                      </DropdownMenuItem>
+                    ))}
+                  </IconParam>
                 </div>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {prompt.length} 字符
-                </span>
+                <div
+                  className="flex min-w-0 shrink-0 flex-wrap items-center gap-1"
+                  aria-label="当前图片参数"
+                >
+                  {[selectedModelLabel, selectedRatioLabel, pixels, selectedCountLabel].map(
+                    (item) => (
+                      <Badge
+                        key={item}
+                        variant="secondary"
+                        className="text-muted-foreground"
+                        title={item}
+                      >
+                        <BadgeCheck data-icon="inline-start" />
+                        <span>{item}</span>
+                      </Badge>
+                    )
+                  )}
+                </div>
+                {isProcessing || waitingCount > 0 ? (
+                  <QueueStatusBadge
+                    running={isProcessing ? 1 : 0}
+                    waiting={waitingCount}
+                  />
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      disabled={prompt.length === 0}
+                      aria-label="清空提示词"
+                      onClick={() => setPrompt("")}
+                    >
+                      <Eraser />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">清空提示词</TooltipContent>
+                </Tooltip>
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {prompt.length} 字符
+                  </span>
+                  <Button
+                    type="button"
+                    size="icon-lg"
+                    disabled={generateDisabled}
+                    onClick={handleGenerate}
+                    aria-label="提交任务"
+                    className="rounded-full hover:bg-primary/80"
+                  >
+                    <ArrowUp className="size-5" strokeWidth={2.5} />
+                  </Button>
+                </div>
               </div>
               <input
                 ref={fileInputRef}
@@ -235,125 +367,45 @@ export function ControlPanel({
             {referenceError ? (
               <p className="text-xs text-destructive">{referenceError}</p>
             ) : null}
+      </div>
+    </motion.section>
+  )
+}
+
+function IconParam({
+  icon,
+  ariaLabel,
+  tooltip,
+  align = "start",
+  children,
+}: {
+  icon: React.ReactNode
+  ariaLabel: string
+  tooltip: React.ReactNode
+  align?: "start" | "end" | "center"
+  children: React.ReactNode
+}) {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
             <Button
-              className="w-full"
-              disabled={generateDisabled}
-              onClick={handleGenerate}
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={ariaLabel}
             >
-              <WandSparkles className="size-4" />
-              提交任务
-              {waitingCount > 0 ? (
-                <span className="ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary-foreground/20 px-1.5 text-[11px] font-medium leading-none tabular-nums">
-                  +{waitingCount}
-                </span>
-              ) : null}
+              {icon}
             </Button>
-            {isProcessing || waitingCount > 0 ? (
-              <QueueStatusBadge
-                running={isProcessing ? 1 : 0}
-                waiting={waitingCount}
-              />
-            ) : null}
-            {!apiConfigured ? (
-              <p className="text-xs text-muted-foreground">
-                未配置 API，
-                <button
-                  type="button"
-                  onClick={openSettings}
-                  className="text-primary underline-offset-2 hover:underline"
-                >
-                  打开设置
-                </button>
-              </p>
-            ) : null}
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="image-count">图片数量</Label>
-            <ButtonGroup className="w-32 shrink-0">
-              <Input
-                id="image-count"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={count}
-                onChange={(event) => {
-                  const raw = event.target.value
-                  if (raw === "") return
-                  const next = Number.parseInt(raw, 10)
-                  if (Number.isNaN(next)) return
-                  const min = Math.min(...countOptions)
-                  const max = Math.max(...countOptions)
-                  setCount(Math.max(min, Math.min(max, next)))
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() =>
-                  setCount(Math.max(Math.min(...countOptions), count - 1))
-                }
-                disabled={count <= Math.min(...countOptions)}
-                aria-label="减少"
-              >
-                <Minus />
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() =>
-                  setCount(Math.min(Math.max(...countOptions), count + 1))
-                }
-                disabled={count >= Math.max(...countOptions)}
-                aria-label="增加"
-              >
-                <Plus />
-              </Button>
-            </ButtonGroup>
-          </div>
-
-          <div className="grid gap-3">
-            <Label>图片比例</Label>
-            <div className="grid grid-cols-6 gap-1 overflow-hidden">
-              {ratios.map((item) => (
-                <Button
-                  key={item.label}
-                  type="button"
-                  variant={ratio === item.label ? "default" : "outline"}
-                  className="h-12 min-w-0 flex-col gap-0.5 rounded-md px-0 text-xs"
-                  onClick={() => setRatio(item.label)}
-                >
-                  <RatioIcon
-                    ratio={item.label}
-                    active={ratio === item.label}
-                  />
-                  <span>{item.label}</span>
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            <Label>图片像素</Label>
-            <ButtonGroup className="w-full">
-              {pixelOptions.map((item) => (
-                <Button
-                  key={item}
-                  type="button"
-                  variant={pixels === item ? "default" : "outline"}
-                  className="flex-1"
-                  onClick={() => setPixels(item)}
-                >
-                  {item}
-                </Button>
-              ))}
-            </ButtonGroup>
-          </div>
-        </div>
-      </ScrollArea>
-    </motion.aside>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">{tooltip}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align={align} className="w-auto">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

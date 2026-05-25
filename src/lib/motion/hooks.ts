@@ -7,6 +7,7 @@ import {
   fadeInUp,
   listContainer,
   listItem,
+  popIn,
   scaleFade,
   slideInDown,
   slideInLeft,
@@ -32,6 +33,10 @@ export function useMotionVariants() {
       slideInDown: reducedVariants,
       listContainer: reducedVariants,
       listItem: reducedVariants,
+      popIn: {
+        initial: { scale: 1 },
+        pop: { scale: 1, transition: { duration: 0 } },
+      },
     }
   }
   return {
@@ -44,5 +49,6 @@ export function useMotionVariants() {
     slideInDown,
     listContainer,
     listItem,
+    popIn,
   }
 }
