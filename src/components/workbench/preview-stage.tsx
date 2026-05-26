@@ -27,6 +27,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Tooltip,
@@ -39,7 +40,7 @@ import { cn } from "@/lib/utils"
 
 type PreviewStageProps = {
   setPrompt: (value: string) => void
-  setImageParams: React.Dispatch<React.SetStateAction<ImageParams>>
+  setImageParams: (value: ImageParams) => void
 }
 
 export function PreviewStage({
@@ -206,11 +207,14 @@ function GeneratingState({ record }: { record: HistoryRecord }) {
   const [now, setNow] = React.useState(() => Date.now())
 
   React.useEffect(() => {
+    setNow(Date.now())
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [startMs])
 
-  const elapsedText = formatElapsedTime(now - startMs)
+  const elapsedMs = now - startMs
+  const elapsedText = formatElapsedTime(elapsedMs)
+  const progressValue = getGeneratingProgress(record.status, elapsedMs)
 
   const phase =
     record.status === "waiting"
@@ -228,11 +232,34 @@ function GeneratingState({ record }: { record: HistoryRecord }) {
           {elapsedText}
         </span>
       </div>
+      <Progress
+        value={progressValue}
+        aria-label="生成进度"
+        className="h-1.5 max-w-56"
+      />
       <p className="text-xs text-muted-foreground">
         可以离开此页面，完成后回来查看
       </p>
     </div>
   )
+}
+
+function getGeneratingProgress(status: HistoryRecord["status"], elapsedMs: number) {
+  const elapsedSeconds = Math.max(0, elapsedMs / 1000)
+
+  if (status === "waiting") return Math.min(10, 4 + elapsedSeconds / 10)
+  if (status === "running") {
+    const baseProgress = 12
+    const targetProgress = 90
+    const estimatedDurationSeconds = 180
+    const progress =
+      baseProgress +
+      (elapsedSeconds / estimatedDurationSeconds) *
+        (targetProgress - baseProgress)
+
+    return Math.min(96, progress)
+  }
+  return 96
 }
 
 function formatElapsedTime(elapsedMs: number): string {

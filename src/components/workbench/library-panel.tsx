@@ -10,10 +10,12 @@ import {
   Clock3,
   Copy,
   FolderInput,
+  FolderOpen,
   Forward,
   History,
   ImageIcon,
   Inbox,
+  Layers3,
   PanelLeft,
   Pencil,
   Plus,
@@ -82,7 +84,7 @@ type ProjectFilter = number | null | undefined
 
 type LibraryPanelProps = {
   setPrompt: (value: string) => void
-  setImageParams: React.Dispatch<React.SetStateAction<ImageParams>>
+  setImageParams: (value: ImageParams) => void
 }
 
 export function LibraryPanel({
@@ -265,7 +267,7 @@ export function LibraryPanel({
     >
       <div className="flex h-12 shrink-0 items-center justify-between px-4">
         <div className="flex items-center gap-2">
-          <Archive className="size-4 text-muted-foreground" />
+          <FolderOpen className="size-4 text-muted-foreground" />
           <p className="text-sm font-medium">素材库</p>
         </div>
         <Button size="icon-sm" variant="ghost">
@@ -294,7 +296,7 @@ export function LibraryPanel({
               历史
             </TabsTrigger>
             <TabsTrigger value="projects">
-              <Archive className="size-4" />
+              <Layers3 className="size-4" />
               项目
             </TabsTrigger>
             <TabsTrigger value="favorites">
@@ -770,7 +772,7 @@ function HistoryCardActions({
                   key={project.id}
                   onSelect={() => onMoveToProject(record, project.id)}
                 >
-                  <Archive className="size-4" />
+                  <Layers3 className="size-4" />
                   {project.name}
                 </DropdownMenuItem>
               ))}
@@ -887,7 +889,7 @@ function ProjectCard({
           onClick={() => onSelect(project.id)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none"
         >
-          <Archive className="size-4 text-muted-foreground" />
+          <Layers3 className="size-4 text-muted-foreground" />
           <span className="truncate text-sm font-medium">{project.name}</span>
         </button>
       )}

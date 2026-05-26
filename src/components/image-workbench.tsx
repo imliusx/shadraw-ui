@@ -27,17 +27,29 @@ import {
   useActiveHistory,
   useHistory,
 } from "@/app/providers/app-state-provider"
-import { DEFAULT_IMAGE_PARAMS } from "@/components/workbench/data"
+import {
+  DEFAULT_IMAGE_PARAMS,
+  imageSizeToRatio,
+  type ImageRatioLabel,
+} from "@/components/workbench/data"
 import type { ImageParams } from "@/components/workbench/types"
 
-const DEFAULT_STAGE_LAYOUT = { preview: 70, controls: 30 }
+const DEFAULT_MOBILE_STAGE_LAYOUT = { preview: 58, controls: 42 }
+const DEFAULT_DESKTOP_LAYOUT = {
+  library: 22,
+  preview: 56,
+  controls: 22,
+}
 
 export function ImageWorkbench() {
   const [prompt, setPrompt] = React.useState("")
   const [imageParams, setImageParams] =
     React.useState<ImageParams>(DEFAULT_IMAGE_PARAMS)
+  const [imageRatio, setImageRatio] = React.useState<ImageRatioLabel>("auto")
   const [referenceImages, setReferenceImages] = React.useState<string[]>([])
-  const [stageLayouts, setStageLayouts] = React.useState<Record<string, Layout>>({})
+  const [mobileStageLayout, setMobileStageLayout] = React.useState<Layout>(
+    DEFAULT_MOBILE_STAGE_LAYOUT
+  )
 
   const searchParams = useSearchParams()
   const { records, isHydrated } = useHistory()
@@ -57,49 +69,54 @@ export function ImageWorkbench() {
     setActive(parsed)
   }, [isHydrated, searchParams, records, setActive])
 
-  const renderStageWithControls = (idPrefix: string) => {
-    const layout = stageLayouts[idPrefix] ?? DEFAULT_STAGE_LAYOUT
+  const applyImageParams = React.useCallback((nextParams: ImageParams) => {
+    setImageParams(nextParams)
+    setImageRatio(imageSizeToRatio(nextParams.size))
+  }, [])
 
+  const renderControlPanel = (variant?: "stacked" | "sidebar") => (
+    <ControlPanel
+      variant={variant}
+      prompt={prompt}
+      setPrompt={setPrompt}
+      imageParams={imageParams}
+      setImageParams={setImageParams}
+      imageRatio={imageRatio}
+      setImageRatio={setImageRatio}
+      referenceImages={referenceImages}
+      setReferenceImages={setReferenceImages}
+    />
+  )
+
+  const renderMobileStageWithControls = () => {
     return (
       <ResizablePanelGroup
-        id={`${idPrefix}-stage`}
+        id="mobile-stage"
         orientation="vertical"
-        defaultLayout={layout}
-        onLayoutChanged={(nextLayout) =>
-          setStageLayouts((prev) => ({
-            ...prev,
-            [idPrefix]: nextLayout,
-          }))
-        }
+        defaultLayout={mobileStageLayout}
+        onLayoutChanged={setMobileStageLayout}
         className="h-full"
       >
         <ResizablePanel
           id="preview"
-          defaultSize={`${layout.preview}%`}
-          minSize="32%"
+          defaultSize={`${mobileStageLayout.preview}%`}
+          minSize="28%"
           className="min-h-0"
         >
           <PreviewStage
             setPrompt={setPrompt}
-            setImageParams={setImageParams}
+            setImageParams={applyImageParams}
           />
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel
           id="controls"
-          defaultSize={`${layout.controls}%`}
-          minSize="22%"
+          defaultSize={`${mobileStageLayout.controls}%`}
+          minSize="34%"
           maxSize="70%"
           className="min-h-0 bg-background"
         >
-          <ControlPanel
-            prompt={prompt}
-            setPrompt={setPrompt}
-            imageParams={imageParams}
-            setImageParams={setImageParams}
-            referenceImages={referenceImages}
-            setReferenceImages={setReferenceImages}
-          />
+          {renderControlPanel("sidebar")}
         </ResizablePanel>
       </ResizablePanelGroup>
     )
@@ -128,46 +145,56 @@ export function ImageWorkbench() {
             </SheetHeader>
             <LibraryPanel
               setPrompt={setPrompt}
-              setImageParams={setImageParams}
+              setImageParams={applyImageParams}
             />
           </SheetContent>
         </Sheet>
       </div>
 
       <div className="h-[calc(100%-3rem)] xl:hidden">
-        {renderStageWithControls("mobile")}
+        {renderMobileStageWithControls()}
       </div>
 
       <ResizablePanelGroup
         id="image-workbench-layout"
         orientation="horizontal"
-        defaultLayout={{
-          library: 22,
-          stage: 78,
-        }}
+        defaultLayout={DEFAULT_DESKTOP_LAYOUT}
         resizeTargetMinimumSize={{ fine: 10, coarse: 28 }}
         className="hidden h-full min-w-0 overflow-hidden xl:flex"
       >
         <ResizablePanel
           id="library"
-          defaultSize="22%"
+          defaultSize={`${DEFAULT_DESKTOP_LAYOUT.library}%`}
           minSize="14%"
           maxSize="32%"
           className="min-w-0 bg-background"
         >
           <LibraryPanel
             setPrompt={setPrompt}
-            setImageParams={setImageParams}
+            setImageParams={applyImageParams}
           />
         </ResizablePanel>
         <ResizableHandle withHandle />
         <ResizablePanel
-          id="stage"
-          defaultSize="78%"
-          minSize="60%"
+          id="preview"
+          defaultSize={`${DEFAULT_DESKTOP_LAYOUT.preview}%`}
+          minSize="38%"
           className="min-w-0"
         >
-          {renderStageWithControls("desktop")}
+          <PreviewStage
+            setPrompt={setPrompt}
+            setImageParams={applyImageParams}
+          />
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel
+          id="controls"
+          defaultSize={`${DEFAULT_DESKTOP_LAYOUT.controls}%`}
+          minSize="20%"
+          maxSize="38%"
+          className="min-w-0 bg-background"
+        >
+          {renderControlPanel("sidebar")}
         </ResizablePanel>
       </ResizablePanelGroup>
     </main>

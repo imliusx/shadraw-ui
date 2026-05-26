@@ -8,6 +8,36 @@ export const DEFAULT_IMAGE_PARAMS: ImageParams = {
   output_format: "png",
 }
 
+export const imageRatioOptions = [
+  { label: "auto", size: "auto" },
+  { label: "1:1", size: "1024x1024" },
+  { label: "3:4", size: "1024x1536" },
+  { label: "4:3", size: "1536x1024" },
+  { label: "9:16", size: "1024x1536" },
+  { label: "16:9", size: "1536x1024" },
+] as const
+
+export type ImageRatioLabel = (typeof imageRatioOptions)[number]["label"]
+
+export function imageRatioToSize(ratio: ImageRatioLabel): string {
+  return imageRatioOptions.find((option) => option.label === ratio)?.size ?? "auto"
+}
+
+export function imageSizeToRatio(size: string): ImageRatioLabel {
+  switch (size) {
+    case "1024x1024":
+    case "2048x2048":
+    case "4096x4096":
+      return "1:1"
+    case "1024x1536":
+      return "3:4"
+    case "1536x1024":
+      return "4:3"
+    default:
+      return "auto"
+  }
+}
+
 export const sizeOptions = [
   "auto",
   "1024x1024",

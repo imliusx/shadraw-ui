@@ -20,6 +20,7 @@ import {
 } from "@/app/providers/app-state-provider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ButtonGroup } from "@/components/ui/button-group"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +30,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
+import { Label } from "@/components/ui/label"
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable"
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -46,10 +62,12 @@ import {
 
 import {
   backgroundOptions,
+  imageRatioOptions,
+  imageRatioToSize,
   moderationOptions,
   outputFormatOptions,
   qualityOptions,
-  sizeOptions,
+  type ImageRatioLabel,
 } from "./data"
 import {
   ReferenceImageUploader,
@@ -67,20 +85,11 @@ const MAX_REFERENCE_IMAGES = 4
 
 type ModelIconComponent = React.ComponentType<{ size?: number | string }>
 
-const SIZE_LABELS: Record<string, string> = {
-  auto: "自动尺寸",
-  "1024x1024": "方图",
-  "1536x1024": "横图",
-  "1024x1536": "竖图",
-  "2048x2048": "高清方图",
-  "4096x4096": "超清方图",
-}
-
 const QUALITY_LABELS: Record<ImageQuality, string> = {
-  auto: "自动质量",
-  high: "高质量",
-  medium: "中等质量",
-  low: "低质量",
+  auto: "自动",
+  high: "高",
+  medium: "中",
+  low: "低",
 }
 
 const BACKGROUND_LABELS: Record<ImageBackground, string> = {
@@ -109,24 +118,83 @@ function getModelIcon(value: string | undefined): ModelIconComponent {
   }
 }
 
-function getSizeLabel(size: string): string {
-  return SIZE_LABELS[size] ?? size
+type ParameterMode = "dropdown" | "sidebar"
+
+type SelectParameterKey =
+  | "background"
+  | "moderation"
+
+type SelectParameterDefinition = {
+  key: SelectParameterKey
+  label: string
+  options: Array<{ value: string; label: string; shortLabel?: string }>
+}
+
+const SELECT_PARAMETER_DEFINITIONS: SelectParameterDefinition[] = [
+  {
+    key: "background",
+    label: "背景处理",
+    options: backgroundOptions.map((background) => ({
+      value: background,
+      label: BACKGROUND_LABELS[background],
+      shortLabel:
+        background === "auto"
+          ? "自动"
+          : background === "transparent"
+            ? "透明"
+            : "不透明",
+    })),
+  },
+  {
+    key: "moderation",
+    label: "内容审核",
+    options: moderationOptions.map((moderation) => ({
+      value: moderation,
+      label: MODERATION_LABELS[moderation],
+      shortLabel: moderation === "auto" ? "标准" : "低",
+    })),
+  },
+]
+
+function getSelectParameterValue(
+  imageParams: ImageParams,
+  key: SelectParameterKey
+): string {
+  return imageParams[key]
+}
+
+function getSelectParameterPatch(
+  key: SelectParameterKey,
+  value: string
+): Partial<ImageParams> {
+  switch (key) {
+    case "background":
+      return { background: value as ImageBackground }
+    case "moderation":
+      return { moderation: value as ImageModeration }
+  }
 }
 
 type ControlPanelProps = {
+  variant?: "stacked" | "sidebar"
   prompt: string
   setPrompt: (value: string) => void
   imageParams: ImageParams
   setImageParams: React.Dispatch<React.SetStateAction<ImageParams>>
+  imageRatio: ImageRatioLabel
+  setImageRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
   referenceImages: string[]
   setReferenceImages: React.Dispatch<React.SetStateAction<string[]>>
 }
 
 export function ControlPanel({
+  variant = "stacked",
   prompt,
   setPrompt,
   imageParams,
   setImageParams,
+  imageRatio,
+  setImageRatio,
   referenceImages,
   setReferenceImages,
 }: ControlPanelProps) {
@@ -215,50 +283,77 @@ export function ControlPanel({
     ? modelOptions.find((option) => option.value === config.model)?.label ??
       config.model
     : "未配置"
-  const selectedSizeLabel = getSizeLabel(imageParams.size)
+  const selectedRatioLabel = imageRatio
   const selectedQualityLabel = QUALITY_LABELS[imageParams.quality]
   const selectedOutputFormatLabel =
     OUTPUT_FORMAT_LABELS[imageParams.output_format]
 
-  return (
-    <motion.section
-      variants={fadeInUp}
-      initial="hidden"
-      animate="show"
-      className="flex h-full min-w-0 flex-col overflow-hidden"
+  const inputArea = (
+    <div
+      className={cn(
+        "flex min-h-0 w-full flex-col gap-3 px-4 pb-4 pt-4",
+        variant === "sidebar" ? "h-full justify-end pt-5" : "flex-1"
+      )}
     >
-      <div className="mx-auto flex min-h-0 w-2/3 flex-1 flex-col gap-3 px-4 pb-4 pt-4">
+      {variant !== "sidebar" ? (
         <div
-          className={cn(
-            "relative flex min-h-20 flex-1 flex-col overflow-hidden rounded-lg border border-input bg-transparent transition-colors dark:bg-input/30",
-            "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
-            referenceError && "border-destructive ring-3 ring-destructive/20",
-            dragOver && "border-ring bg-accent/40"
-          )}
-          onDragOver={(event) => {
-            if (!Array.from(event.dataTransfer.types).includes("Files")) return
-            event.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node)) return
-            setDragOver(false)
-          }}
-          onDrop={(event) => {
-            event.preventDefault()
-            setDragOver(false)
-            const files = event.dataTransfer.files
-            if (files && files.length > 0) void handleFiles(files)
-          }}
+          className="flex min-w-0 flex-wrap items-center gap-1"
+          aria-label="当前图片参数"
         >
-          <Textarea
-            id="prompt"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            className="field-sizing-fixed min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent px-3 pb-3 pt-2.5 shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
-            placeholder="描述你想生成的图片..."
-          />
-          <div className="flex items-center gap-2 px-2 pb-2 pt-2">
+          {[
+            { key: "model", label: selectedModelLabel },
+            { key: "ratio", label: selectedRatioLabel },
+            { key: "quality", label: selectedQualityLabel },
+            { key: "format", label: selectedOutputFormatLabel },
+          ].map((item) => (
+            <Badge
+              key={item.key}
+              variant="secondary"
+              className="h-4 gap-0.5 px-1.5 text-[10px] text-muted-foreground"
+              title={item.label}
+            >
+              <BadgeCheck data-icon="inline-start" />
+              <span>{item.label}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "relative flex min-h-20 flex-col overflow-hidden rounded-lg border border-input bg-transparent transition-colors dark:bg-input/30",
+          variant === "sidebar" ? "min-h-28 flex-1" : "flex-1",
+          "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+          referenceError && "border-destructive ring-3 ring-destructive/20",
+          dragOver && "border-ring bg-accent/40"
+        )}
+        onDragOver={(event) => {
+          if (!Array.from(event.dataTransfer.types).includes("Files")) return
+          event.preventDefault()
+          setDragOver(true)
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return
+          setDragOver(false)
+        }}
+        onDrop={(event) => {
+          event.preventDefault()
+          setDragOver(false)
+          const files = event.dataTransfer.files
+          if (files && files.length > 0) void handleFiles(files)
+        }}
+      >
+        <Textarea
+          id="prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          className="field-sizing-fixed min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent px-3 pb-3 pt-2.5 shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+          placeholder="描述你想生成的图片..."
+        />
+        <div className="flex flex-col gap-1.5 px-2 pb-2 pt-2">
+          {runningCount > 0 || waitingCount > 0 ? (
+            <QueueStatusBadge running={runningCount} waiting={waitingCount} />
+          ) : null}
+          <div className="flex min-w-0 items-center gap-2">
             <div className="flex shrink-0 items-center gap-0.5">
               <ReferenceImageUploader
                 values={referenceImages}
@@ -294,175 +389,21 @@ export function ControlPanel({
                   )
                 })}
               </IconParam>
-              <IconParam
-                icon={<SlidersHorizontal />}
-                ariaLabel="选择图片参数"
-                tooltip={`参数: ${selectedSizeLabel} · ${selectedQualityLabel}`}
-              >
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>图片尺寸</DropdownMenuLabel>
-                  {sizeOptions.map((size) => (
-                    <DropdownMenuItem
-                      key={size}
-                      onSelect={() => updateImageParams({ size })}
-                    >
-                      <SizeIcon size={size} active={imageParams.size === size} />
-                      <span>{getSizeLabel(size)}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          imageParams.size === size
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>生成质量</DropdownMenuLabel>
-                  {qualityOptions.map((quality) => (
-                    <DropdownMenuItem
-                      key={quality}
-                      onSelect={() => updateImageParams({ quality })}
-                    >
-                      <span>{QUALITY_LABELS[quality]}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          imageParams.quality === quality
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>背景处理</DropdownMenuLabel>
-                  {backgroundOptions.map((background) => (
-                    <DropdownMenuItem
-                      key={background}
-                      onSelect={() => updateImageParams({ background })}
-                    >
-                      <span>{BACKGROUND_LABELS[background]}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          imageParams.background === background
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>内容审核</DropdownMenuLabel>
-                  {moderationOptions.map((moderation) => (
-                    <DropdownMenuItem
-                      key={moderation}
-                      onSelect={() => updateImageParams({ moderation })}
-                    >
-                      <span>{MODERATION_LABELS[moderation]}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          imageParams.moderation === moderation
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>输出格式</DropdownMenuLabel>
-                  {outputFormatOptions.map((outputFormat) => (
-                    <DropdownMenuItem
-                      key={outputFormat}
-                      onSelect={() =>
-                        updateImageParams({ output_format: outputFormat })
-                      }
-                    >
-                      <span>{OUTPUT_FORMAT_LABELS[outputFormat]}</span>
-                      <Check
-                        className={cn(
-                          "ml-auto",
-                          imageParams.output_format === outputFormat
-                            ? "opacity-100"
-                            : "opacity-0"
-                        )}
-                      />
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <div className="grid gap-2 px-1.5 py-1">
-                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>输出压缩质量</span>
-                    <span className="font-mono">
-                      {imageParams.output_compression ?? "自动"}
-                    </span>
-                  </div>
-                  <Slider
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={[imageParams.output_compression ?? 100]}
-                    onValueChange={(value) =>
-                      updateImageParams({
-                        output_compression:
-                          value[0] === 100 ? undefined : value[0],
-                      })
-                    }
-                  />
-                </div>
-                <div className="grid gap-2 px-1.5 py-1">
-                  <label className="grid gap-1 text-xs text-muted-foreground">
-                    <span>用户标识</span>
-                    <Input
-                      value={imageParams.user ?? ""}
-                      placeholder="可选"
-                      onChange={(event) =>
-                        updateImageParams({
-                          user: event.target.value.trim() || undefined,
-                        })
-                      }
-                      className="h-7"
-                    />
-                  </label>
-                </div>
-              </IconParam>
-            </div>
-            <div
-              className="flex min-w-0 shrink-0 flex-wrap items-center gap-1"
-              aria-label="当前图片参数"
-            >
-              {[
-                { key: "model", label: selectedModelLabel },
-                { key: "size", label: selectedSizeLabel },
-                { key: "quality", label: selectedQualityLabel },
-                { key: "format", label: selectedOutputFormatLabel },
-              ].map((item) => (
-                <Badge
-                  key={item.key}
-                  variant="secondary"
-                  className="text-muted-foreground"
-                  title={item.label}
+              {variant !== "sidebar" ? (
+                <IconParam
+                  icon={<SlidersHorizontal />}
+                  ariaLabel="选择图片参数"
+                  tooltip={`参数: ${selectedRatioLabel} · ${selectedQualityLabel}`}
                 >
-                  <BadgeCheck data-icon="inline-start" />
-                  <span>{item.label}</span>
-                </Badge>
-              ))}
+                  <ParameterDropdownContent
+                    imageParams={imageParams}
+                    updateImageParams={updateImageParams}
+                    imageRatio={imageRatio}
+                    setImageRatio={setImageRatio}
+                  />
+                </IconParam>
+              ) : null}
             </div>
-            {runningCount > 0 || waitingCount > 0 ? (
-              <QueueStatusBadge running={runningCount} waiting={waitingCount} />
-            ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -495,25 +436,70 @@ export function ControlPanel({
               </Button>
             </div>
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              const files = event.target.files
-                ? Array.from(event.target.files)
-                : []
-              event.target.value = ""
-              if (files.length > 0) void handleFiles(files)
-            }}
-          />
         </div>
-        {referenceError ? (
-          <p className="text-xs text-destructive">{referenceError}</p>
-        ) : null}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            const files = event.target.files
+              ? Array.from(event.target.files)
+              : []
+            event.target.value = ""
+            if (files.length > 0) void handleFiles(files)
+          }}
+        />
       </div>
+      {referenceError ? (
+        <p className="text-xs text-destructive">{referenceError}</p>
+      ) : null}
+    </div>
+  )
+
+  return (
+    <motion.section
+      variants={fadeInUp}
+      initial="hidden"
+      animate="show"
+      className="flex h-full min-w-0 flex-col overflow-hidden"
+    >
+      {variant === "sidebar" ? (
+        <ResizablePanelGroup
+          id={`control-panel-${variant}-layout`}
+          orientation="vertical"
+          defaultLayout={{ parameters: 72, input: 28 }}
+          resizeTargetMinimumSize={{ fine: 10, coarse: 24 }}
+          className="h-full min-h-0"
+        >
+          <ResizablePanel
+            id="parameters"
+            defaultSize="72%"
+            minSize="36%"
+            className="min-h-0"
+          >
+            <ParameterSidebar
+              imageParams={imageParams}
+              updateImageParams={updateImageParams}
+              imageRatio={imageRatio}
+              setImageRatio={setImageRatio}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+          <ResizablePanel
+            id="input"
+            defaultSize="28%"
+            minSize="22%"
+            maxSize="56%"
+            className="min-h-0 bg-background"
+          >
+            {inputArea}
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        inputArea
+      )}
     </motion.section>
   )
 }
@@ -555,9 +541,466 @@ function IconParam({
   )
 }
 
-function SizeIcon({ size, active }: { size: string; active: boolean }) {
-  const isAuto = size === "auto"
-  const [width, height] = isAuto ? [0, 0] : size.split("x").map(Number)
+function ParameterDropdownContent({
+  imageParams,
+  updateImageParams,
+  imageRatio,
+  setImageRatio,
+}: {
+  imageParams: ImageParams
+  updateImageParams: (patch: Partial<ImageParams>) => void
+  imageRatio: ImageRatioLabel
+  setImageRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
+}) {
+  return (
+    <>
+      <ParameterFields
+        mode="dropdown"
+        imageParams={imageParams}
+        updateImageParams={updateImageParams}
+        imageRatio={imageRatio}
+        setImageRatio={setImageRatio}
+      />
+    </>
+  )
+}
+
+function ParameterSidebar({
+  imageParams,
+  updateImageParams,
+  imageRatio,
+  setImageRatio,
+}: {
+  imageParams: ImageParams
+  updateImageParams: (patch: Partial<ImageParams>) => void
+  imageRatio: ImageRatioLabel
+  setImageRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-12 shrink-0 items-center px-4">
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="size-4 text-muted-foreground" />
+          <p className="text-sm font-medium">参数</p>
+        </div>
+      </div>
+      <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <FieldGroup className="gap-5 px-4 pb-4 pt-2">
+          <ParameterFields
+            mode="sidebar"
+            imageParams={imageParams}
+            updateImageParams={updateImageParams}
+            imageRatio={imageRatio}
+            setImageRatio={setImageRatio}
+          />
+        </FieldGroup>
+      </ScrollArea>
+    </div>
+  )
+}
+
+function ParameterFields({
+  mode,
+  imageParams,
+  updateImageParams,
+  imageRatio,
+  setImageRatio,
+}: {
+  mode: ParameterMode
+  imageParams: ImageParams
+  updateImageParams: (patch: Partial<ImageParams>) => void
+  imageRatio: ImageRatioLabel
+  setImageRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
+}) {
+  return (
+    <>
+      {mode === "dropdown" ? (
+        <RatioSizeDropdownField
+          ratio={imageRatio}
+          setRatio={setImageRatio}
+          updateImageParams={updateImageParams}
+        />
+      ) : (
+        <RatioSizeButtonField
+          ratio={imageRatio}
+          setRatio={setImageRatio}
+          updateImageParams={updateImageParams}
+        />
+      )}
+      {mode === "dropdown" ? <DropdownMenuSeparator /> : null}
+      {mode === "dropdown" ? (
+        <ImageQualityDropdownField
+          quality={imageParams.quality}
+          updateImageParams={updateImageParams}
+        />
+      ) : (
+        <ImageQualityButtonField
+          quality={imageParams.quality}
+          updateImageParams={updateImageParams}
+        />
+      )}
+      {SELECT_PARAMETER_DEFINITIONS.map((definition) => (
+        <React.Fragment key={definition.key}>
+          {mode === "dropdown" ? <DropdownMenuSeparator /> : null}
+          <SelectParameterField
+            mode={mode}
+            definition={definition}
+            imageParams={imageParams}
+            updateImageParams={updateImageParams}
+          />
+        </React.Fragment>
+      ))}
+      {mode === "dropdown" ? <DropdownMenuSeparator /> : null}
+      {mode === "dropdown" ? (
+        <OutputFormatDropdownField
+          value={imageParams.output_format}
+          updateImageParams={updateImageParams}
+        />
+      ) : (
+        <OutputFormatRadioField
+          value={imageParams.output_format}
+          updateImageParams={updateImageParams}
+        />
+      )}
+      {mode === "dropdown" ? <DropdownMenuSeparator /> : null}
+      <OutputCompressionField
+        mode={mode}
+        value={imageParams.output_compression}
+        onChange={(outputCompression) =>
+          updateImageParams({ output_compression: outputCompression })
+        }
+      />
+    </>
+  )
+}
+
+function RatioSizeDropdownField({
+  ratio,
+  setRatio,
+  updateImageParams,
+}: {
+  ratio: ImageRatioLabel
+  setRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <DropdownMenuGroup>
+      <DropdownMenuLabel>图片比例</DropdownMenuLabel>
+      {imageRatioOptions.map((option) => (
+        <DropdownMenuItem
+          key={option.label}
+          onSelect={() => {
+            setRatio(option.label)
+            updateImageParams({ size: imageRatioToSize(option.label) })
+          }}
+        >
+          <RatioIcon ratio={option.label} active={ratio === option.label} />
+          <span>{option.label}</span>
+          <Check
+            className={cn(
+              "ml-auto",
+              ratio === option.label ? "opacity-100" : "opacity-0"
+            )}
+          />
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuGroup>
+  )
+}
+
+function RatioSizeButtonField({
+  ratio,
+  setRatio,
+  updateImageParams,
+}: {
+  ratio: ImageRatioLabel
+  setRatio: React.Dispatch<React.SetStateAction<ImageRatioLabel>>
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs text-muted-foreground">
+        图片比例
+      </FieldLabel>
+      <div className="grid grid-cols-6 gap-1 overflow-hidden">
+        {imageRatioOptions.map((option) => (
+          <Button
+            key={option.label}
+            type="button"
+            variant={ratio === option.label ? "default" : "outline"}
+            className="h-11 min-w-0 flex-col gap-0.5 rounded-md px-0 text-[10px]"
+            onClick={() => {
+              setRatio(option.label)
+              updateImageParams({ size: imageRatioToSize(option.label) })
+            }}
+          >
+            <RatioIcon ratio={option.label} active={ratio === option.label} />
+            <span>{option.label}</span>
+          </Button>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
+function ImageQualityDropdownField({
+  quality,
+  updateImageParams,
+}: {
+  quality: ImageQuality
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <DropdownMenuGroup>
+      <DropdownMenuLabel>图片质量</DropdownMenuLabel>
+      {qualityOptions.map((option) => (
+        <DropdownMenuItem
+          key={option}
+          onSelect={() => updateImageParams({ quality: option })}
+        >
+          <span>{QUALITY_LABELS[option]}</span>
+          <Check
+            className={cn(
+              "ml-auto",
+              quality === option ? "opacity-100" : "opacity-0"
+            )}
+          />
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuGroup>
+  )
+}
+
+function ImageQualityButtonField({
+  quality,
+  updateImageParams,
+}: {
+  quality: ImageQuality
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs text-muted-foreground">
+        图片质量
+      </FieldLabel>
+      <ButtonGroup className="w-full">
+        {qualityOptions.map((option) => (
+          <Button
+            key={option}
+            type="button"
+            variant={quality === option ? "default" : "outline"}
+            className="flex-1"
+            onClick={() => updateImageParams({ quality: option })}
+          >
+            {QUALITY_LABELS[option]}
+          </Button>
+        ))}
+      </ButtonGroup>
+    </Field>
+  )
+}
+
+function SelectParameterField({
+  mode,
+  definition,
+  imageParams,
+  updateImageParams,
+}: {
+  mode: ParameterMode
+  definition: SelectParameterDefinition
+  imageParams: ImageParams
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  const value = getSelectParameterValue(imageParams, definition.key)
+  const onValueChange = (nextValue: string) =>
+    updateImageParams(getSelectParameterPatch(definition.key, nextValue))
+
+  if (mode === "dropdown") {
+    return (
+      <DropdownMenuGroup>
+        <DropdownMenuLabel>{definition.label}</DropdownMenuLabel>
+        {definition.options.map((option) => (
+          <DropdownMenuItem
+            key={option.value}
+            onSelect={() => onValueChange(option.value)}
+          >
+            <span>{option.label}</span>
+            <Check
+              className={cn(
+                "ml-auto",
+                value === option.value ? "opacity-100" : "opacity-0"
+              )}
+            />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuGroup>
+    )
+  }
+
+  return (
+    <ButtonParameterField
+      definition={definition}
+      value={value}
+      onValueChange={onValueChange}
+    />
+  )
+}
+
+function OutputFormatDropdownField({
+  value,
+  updateImageParams,
+}: {
+  value: ImageOutputFormat
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <DropdownMenuGroup>
+      <DropdownMenuLabel>输出格式</DropdownMenuLabel>
+      {outputFormatOptions.map((option) => (
+        <DropdownMenuItem
+          key={option}
+          onSelect={() => updateImageParams({ output_format: option })}
+        >
+          <span>{OUTPUT_FORMAT_LABELS[option]}</span>
+          <Check
+            className={cn(
+              "ml-auto",
+              value === option ? "opacity-100" : "opacity-0"
+            )}
+          />
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuGroup>
+  )
+}
+
+function OutputFormatRadioField({
+  value,
+  updateImageParams,
+}: {
+  value: ImageOutputFormat
+  updateImageParams: (patch: Partial<ImageParams>) => void
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs text-muted-foreground">
+        输出格式
+      </FieldLabel>
+      <RadioGroup
+        value={value}
+        onValueChange={(nextValue) =>
+          updateImageParams({ output_format: nextValue as ImageOutputFormat })
+        }
+        className="grid grid-cols-3 gap-3"
+      >
+        {outputFormatOptions.map((option) => (
+          <div
+            key={option}
+            className="flex items-center gap-3"
+          >
+            <RadioGroupItem id={`output-format-${option}`} value={option} />
+            <Label
+              htmlFor={`output-format-${option}`}
+              className="cursor-pointer text-sm font-medium"
+            >
+              {option.toUpperCase()}
+            </Label>
+          </div>
+        ))}
+      </RadioGroup>
+    </Field>
+  )
+}
+
+function OutputCompressionField({
+  mode,
+  value,
+  onChange,
+}: {
+  mode: ParameterMode
+  value: number | undefined
+  onChange: (value: number | undefined) => void
+}) {
+  const displayValue = value ?? "自动"
+
+  if (mode === "dropdown") {
+    return (
+      <div className="grid gap-2 px-1.5 py-1">
+        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span>输出压缩质量</span>
+          <span className="font-mono">{displayValue}</span>
+        </div>
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={[value ?? 100]}
+          onValueChange={(nextValue) =>
+            onChange(nextValue[0] === 100 ? undefined : nextValue[0])
+          }
+        />
+      </div>
+    )
+  }
+
+  return (
+    <Field>
+      <div className="flex items-center justify-between gap-3">
+        <FieldLabel className="text-xs text-muted-foreground">
+          输出压缩质量
+        </FieldLabel>
+        <span className="text-xs font-medium text-muted-foreground">
+          {displayValue}
+        </span>
+      </div>
+      <Slider
+        min={0}
+        max={100}
+        step={1}
+        value={[value ?? 100]}
+        onValueChange={(nextValue) =>
+          onChange(nextValue[0] === 100 ? undefined : nextValue[0])
+        }
+      />
+    </Field>
+  )
+}
+
+function ButtonParameterField({
+  definition,
+  value,
+  onValueChange,
+}: {
+  definition: SelectParameterDefinition
+  value: string
+  onValueChange: (value: string) => void
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs text-muted-foreground">
+        {definition.label}
+      </FieldLabel>
+      <ButtonGroup className="w-full">
+        {definition.options.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant={value === option.value ? "default" : "outline"}
+            className="min-w-0 flex-1 px-2 text-xs"
+            title={option.label}
+            onClick={() => onValueChange(option.value)}
+          >
+            {option.shortLabel ?? option.label}
+          </Button>
+        ))}
+      </ButtonGroup>
+    </Field>
+  )
+}
+
+function RatioIcon({ ratio, active }: { ratio: string; active: boolean }) {
+  const isAuto = ratio === "auto"
+  const [width, height] = isAuto ? [0, 0] : ratio.split(":").map(Number)
   const isPortrait = !isAuto && height > width
   const isSquare = !isAuto && width === height
   const isWide = !isAuto && width > height
@@ -601,7 +1044,7 @@ function QueueStatusBadge({
     <div
       role="status"
       aria-live="polite"
-      className="flex shrink-0 items-center gap-1.5"
+      className="flex min-w-0 flex-wrap items-center gap-1.5"
     >
       {running > 0 ? (
         <Badge variant="outline" className={cn("gap-1.5", infoClasses)}>
