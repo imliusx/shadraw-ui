@@ -183,9 +183,14 @@ export async function fetchImageBlobURL(recordId: string): Promise<string> {
   const tokens = tokenStorage.read()
   const headers = new Headers()
   if (tokens?.accessToken) headers.set("Authorization", `Bearer ${tokens.accessToken}`)
-  const resp = await fetch(`${API_BASE}/api/v1/images/${recordId}`, { headers })
+  const path = `/api/v1/images/${recordId}`
+  const resp = await fetch(`${API_BASE}${path}`, { headers })
   if (!resp.ok) {
-    throw new ApiError("not_found", `image ${recordId} ${resp.status}`, resp.status)
+    throw new ApiError(
+      "not_found",
+      `image ${recordId} ${resp.status}`,
+      resp.status
+    )
   }
   const blob = await resp.blob()
   return URL.createObjectURL(blob)

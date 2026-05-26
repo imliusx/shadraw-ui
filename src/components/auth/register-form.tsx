@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { motion } from "motion/react"
+import { CircleAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { useAuth } from "@/app/providers/auth-provider"
@@ -154,6 +155,7 @@ export function RegisterForm() {
           <FieldGroup>
             {error ? (
               <Alert variant="destructive">
+                <CircleAlert />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             ) : null}

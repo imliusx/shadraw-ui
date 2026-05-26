@@ -18,13 +18,20 @@ import {
   type RecordDTO,
 } from "@/lib/api/records-client"
 import { fetchImageBlobURL, ApiError } from "@/lib/api/client"
+import {
+  localizeErrorMessage,
+  toUserFacingErrorMessage,
+} from "@/lib/api/errors"
 import { tokenStorage } from "@/lib/api/auth-storage"
+import { useAuth } from "@/app/providers/auth-provider"
 import type {
   ApiStatus,
   Config,
   HistoryRecord,
+  ImageParams,
   Project,
 } from "@/components/workbench/types"
+import { DEFAULT_IMAGE_PARAMS } from "@/components/workbench/data"
 
 type LightboxState = {
   open: boolean
@@ -194,13 +201,14 @@ type HistoryContextValue = {
   addRecord: (params: {
     prompt: string
     model: string
-    ratio: string
-    pixels: string
+    imageParams: ImageParams
     referenceImages?: string[]
   }) => Promise<HistoryRecord>
+  retryRecord: (id: number) => Promise<void>
   updateRecord: (id: number, patch: Partial<HistoryRecord>) => Promise<void>
   deleteRecord: (id: number) => Promise<void>
   getById: (id: number) => HistoryRecord | undefined
+  reloadImage: (id: number) => Promise<void>
 }
 
 type ProjectsContextValue = {
@@ -246,16 +254,16 @@ const EventLogContext = createContext<EventLogContextValue | null>(null)
 // ---- helpers ----
 
 function dtoToRecord(dto: RecordDTO, base64?: string): HistoryRecord {
+  const imageParams = normalizeImageParams(dto.imageParams)
   return {
     id: Number(dto.id),
     prompt: dto.prompt,
     model: dto.model,
-    ratio: dto.ratio,
-    pixels: dto.pixels,
+    imageParams,
     status: dto.status,
     base64,
     favorite: dto.favorite,
-    error: dto.error,
+    error: dto.error ? toUserFacingErrorMessage(dto.error) : undefined,
     projectId: dto.projectId ? Number(dto.projectId) : undefined,
     createdAt: dto.createdAt ? Date.parse(dto.createdAt) : Date.now(),
     startedAt: dto.startedAt ? Date.parse(dto.startedAt) : undefined,
@@ -271,6 +279,70 @@ function dtoToProject(dto: { id: string; name: string; createdAt: string }): Pro
   }
 }
 
+function dtoToRecordPatch(dto: RecordDTO): Partial<HistoryRecord> {
+  const imageParams = normalizeImageParams(dto.imageParams)
+  return {
+    prompt: dto.prompt,
+    model: dto.model,
+    imageParams,
+    status: dto.status,
+    favorite: dto.favorite,
+    error: dto.error ? toUserFacingErrorMessage(dto.error) : undefined,
+    projectId: dto.projectId ? Number(dto.projectId) : undefined,
+    startedAt: dto.startedAt ? Date.parse(dto.startedAt) : undefined,
+    completedAt: dto.completedAt ? Date.parse(dto.completedAt) : undefined,
+  }
+}
+
+function normalizeImageParams(params?: Partial<ImageParams>): ImageParams {
+  const incoming = (params ?? {}) as Partial<ImageParams> & { n?: unknown }
+  const outputCompression =
+    typeof incoming.output_compression === "number" &&
+    Number.isFinite(incoming.output_compression)
+      ? Math.trunc(incoming.output_compression)
+      : undefined
+  const partialImages =
+    typeof incoming.partial_images === "number" &&
+    Number.isFinite(incoming.partial_images)
+      ? Math.trunc(incoming.partial_images)
+      : undefined
+
+  return {
+    size: incoming.size ?? DEFAULT_IMAGE_PARAMS.size,
+    quality: incoming.quality ?? DEFAULT_IMAGE_PARAMS.quality,
+    background: incoming.background ?? DEFAULT_IMAGE_PARAMS.background,
+    moderation: incoming.moderation ?? DEFAULT_IMAGE_PARAMS.moderation,
+    output_format: incoming.output_format ?? DEFAULT_IMAGE_PARAMS.output_format,
+    output_compression: outputCompression,
+    partial_images: partialImages,
+    stream: incoming.stream,
+    input_fidelity: incoming.input_fidelity,
+    mask: incoming.mask,
+    response_format: incoming.response_format,
+    style: incoming.style,
+    user: incoming.user,
+  }
+}
+
+async function runConcurrent(
+  ids: number[],
+  limit: number,
+  fn: (id: number) => Promise<void>
+) {
+  const queue = [...ids]
+  const workers = Array.from(
+    { length: Math.min(limit, queue.length) },
+    async () => {
+      while (queue.length > 0) {
+        const next = queue.shift()
+        if (next === undefined) break
+        await fn(next)
+      }
+    }
+  )
+  await Promise.all(workers)
+}
+
 // ---- provider ----
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
@@ -280,8 +352,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     stateRef.current = state
   }, [state])
 
-  // Map record id -> in-flight image blob URL (so we can revoke on unmount/replace).
-  const blobUrlsRef = useRef<Map<number, string>>(new Map())
+  // Map record id -> blob URL (so we can revoke on unmount/replace).
+  const blobUrlsRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     const urls = blobUrlsRef.current
     return () => {
@@ -293,72 +365,54 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // Active polls: record id -> abort flag.
   const pollersRef = useRef<Set<number>>(new Set())
 
-  useEffect(() => {
-    let cancelled = false
-    async function hydrate() {
-      if (!tokenStorage.read()) {
-        dispatch({ type: "system/hydrated" })
-        return
-      }
-      try {
-        const [records, projects, cfg] = await Promise.all([
-          recordsApi.list({ pageSize: 100 }),
-          projectsApi.list(),
-          appConfigApi.load(),
-        ])
-        if (cancelled) return
-        const list = records.data.records.map((d) => dtoToRecord(d))
-        dispatch({ type: "history/load", payload: list })
-        dispatch({
-          type: "projects/load",
-          payload: projects.map(dtoToProject),
-        })
-        const defaultModel =
-          cfg.enabledModels[0] ?? ""
-        dispatch({
-          type: "config/load",
-          payload: {
-            config: { ...DEFAULT_CONFIG, model: defaultModel },
-            enabledModels: cfg.enabledModels,
-          },
-        })
-        // Hydrate images for completed records.
-        for (const rec of list) {
-          if (rec.status === "completed") {
-            void loadImageFor(rec.id)
-          } else if (rec.status === "waiting" || rec.status === "running") {
-            void startPolling(rec.id)
-          }
-        }
-      } catch (err) {
-        if (cancelled) return
-        // Auth failure leaves auth-provider to redirect; here we just stop hydrating.
-        if (err instanceof ApiError && (err.status === 401 || err.code === "network_error")) {
-          // proceed without data
-        } else {
-          // eslint-disable-next-line no-console
-          console.warn("hydrate failed", err)
-        }
-      } finally {
-        if (!cancelled) dispatch({ type: "system/hydrated" })
-      }
-    }
-    void hydrate()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+
+  // Wipe all in-memory user data. Called on user-id change.
+  const wipe = useCallback(() => {
+    blobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    blobUrlsRef.current.clear()
+    pollersRef.current.clear()
+    dispatch({ type: "history/load", payload: [] })
+    dispatch({ type: "projects/load", payload: [] })
+    dispatch({
+      type: "config/load",
+      payload: { config: DEFAULT_CONFIG, enabledModels: [] },
+    })
+    dispatch({ type: "ui/setActive", payload: null })
+    dispatch({ type: "ui/closeLightbox" })
+    dispatch({ type: "events/clear" })
   }, [])
 
   const loadImageFor = useCallback(async (id: number) => {
+    // Mark "in flight": clear any prior error and base64 so UI shows loading.
+    dispatch({
+      type: "history/update",
+      payload: { id, patch: { imageError: undefined, base64: undefined } },
+    })
     try {
-      const existing = blobUrlsRef.current.get(id)
+      const key = String(id)
+      const existing = blobUrlsRef.current.get(key)
       if (existing) URL.revokeObjectURL(existing)
       const url = await fetchImageBlobURL(String(id))
-      blobUrlsRef.current.set(id, url)
-      dispatch({ type: "history/update", payload: { id, patch: { base64: url } } })
-    } catch {
-      // best effort
+      blobUrlsRef.current.set(key, url)
+      dispatch({
+        type: "history/update",
+        payload: {
+          id,
+          patch: {
+            base64: url,
+            imageError: undefined,
+          },
+        },
+      })
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : "图片加载失败"
+      dispatch({
+        type: "history/update",
+        payload: { id, patch: { imageError: message } },
+      })
     }
   }, [])
 
@@ -370,8 +424,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (!pollersRef.current.has(id)) return
         try {
           const dto = await recordsApi.get(String(id))
-          const next = dtoToRecord(dto)
-          dispatch({ type: "history/update", payload: { id, patch: next } })
+          // Patch only the backend-managed fields. `base64` (a blob URL) and
+          // `referenceImages` are front-end-only state that must survive.
+          dispatch({
+            type: "history/update",
+            payload: {
+              id,
+              patch: dtoToRecordPatch(dto),
+            },
+          })
           if (dto.status === "completed") {
             pollersRef.current.delete(id)
             await loadImageFor(id)
@@ -391,13 +452,90 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [loadImageFor]
   )
 
+  useEffect(() => {
+    // user changed (login/logout/switch). Drop stale data and re-hydrate.
+    wipe()
+    let cancelled = false
+    async function hydrate() {
+      if (!userId || !tokenStorage.read()) {
+        dispatch({ type: "system/hydrated" })
+        dispatch({ type: "ui/setApiStatus", payload: { status: "idle" } })
+        return
+      }
+      try {
+        const [records, projects, cfg] = await Promise.all([
+          recordsApi.list({ pageSize: 100 }),
+          projectsApi.list(),
+          appConfigApi.load(),
+        ])
+        if (cancelled) return
+        const list = records.data.records.map((d) => dtoToRecord(d))
+        dispatch({ type: "history/load", payload: list })
+        dispatch({
+          type: "projects/load",
+          payload: projects.map(dtoToProject),
+        })
+        // Default model selection: prefer gpt-image-2 if enabled, else first.
+        const pickModel = (models: string[]): string => {
+          if (models.length === 0) return ""
+          if (models.includes("gpt-image-2")) return "gpt-image-2"
+          return models[0] ?? ""
+        }
+        dispatch({
+          type: "config/load",
+          payload: {
+            config: { ...DEFAULT_CONFIG, model: pickModel(cfg.enabledModels) },
+            enabledModels: cfg.enabledModels,
+          },
+        })
+        // Reflect upstream-config readiness in the global status indicator.
+        dispatch({
+          type: "ui/setApiStatus",
+          payload:
+            cfg.enabledModels.length > 0
+              ? { status: "success" }
+              : {
+                  status: "error",
+                  errorMessage: "管理员尚未配置可用模型",
+                },
+        })
+        // Hydrate completed record images (concurrency-limited so we
+        // don't slam the backend or hit the browser's 6/host limit).
+        const completedIds = list
+          .filter((r) => r.status === "completed")
+          .map((r) => r.id)
+        void runConcurrent(completedIds, 4, loadImageFor)
+        for (const rec of list) {
+          if (rec.status === "waiting" || rec.status === "running") {
+            void startPolling(rec.id)
+          }
+        }
+      } catch (err) {
+        if (cancelled) return
+        dispatch({
+          type: "ui/setApiStatus",
+          payload: {
+            status: "error",
+            errorMessage:
+              err instanceof ApiError ? err.message : "无法加载用户数据",
+          },
+        })
+      } finally {
+        if (!cancelled) dispatch({ type: "system/hydrated" })
+      }
+    }
+    void hydrate()
+    return () => {
+      cancelled = true
+    }
+  }, [userId, wipe, loadImageFor, startPolling])
+
   const addRecord = useCallback<HistoryContextValue["addRecord"]>(
-    async ({ prompt, model, ratio, pixels, referenceImages }) => {
+    async ({ prompt, model, imageParams, referenceImages }) => {
       const dto = await recordsApi.create({
         prompt,
         model,
-        ratio,
-        pixels,
+        imageParams,
         referenceImages,
       })
       const record = dtoToRecord(dto)
@@ -405,6 +543,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "history/add", payload: record })
       void startPolling(record.id)
       return record
+    },
+    [startPolling]
+  )
+
+  const retryRecord = useCallback<HistoryContextValue["retryRecord"]>(
+    async (id) => {
+      const dto = await recordsApi.retry(String(id))
+      dispatch({
+        type: "history/update",
+        payload: {
+          id,
+          patch: {
+            ...dtoToRecordPatch(dto),
+            base64: undefined,
+            imageError: undefined,
+          },
+        },
+      })
+      startPolling(id)
     },
     [startPolling]
   )
@@ -437,20 +594,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       } catch {
         /* ignore; still drop locally */
       }
-      const url = blobUrlsRef.current.get(id)
-      if (url) {
-        URL.revokeObjectURL(url)
-        blobUrlsRef.current.delete(id)
-      }
+      const staleKeys: string[] = []
+      blobUrlsRef.current.forEach((value, key) => {
+        if (key.startsWith(`${id}:`)) {
+          URL.revokeObjectURL(value)
+          staleKeys.push(key)
+        }
+      })
+      for (const key of staleKeys) blobUrlsRef.current.delete(key)
       pollersRef.current.delete(id)
       dispatch({ type: "history/delete", payload: id })
     },
     []
   )
 
+  // Must read state.history (not stateRef), otherwise consumers like
+  // preview-stage see a one-frame-stale record (the ref is updated by an
+  // effect that runs *after* the children commit).
   const getById = useCallback(
-    (id: number) => stateRef.current.history.find((r) => r.id === id),
-    []
+    (id: number) => state.history.find((r) => r.id === id),
+    [state.history]
   )
 
   const addProject = useCallback<ProjectsContextValue["addProject"]>(async (name) => {
@@ -561,11 +724,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       records: state.history,
       isHydrated: state.isHydrated,
       addRecord,
+      retryRecord,
       updateRecord,
       deleteRecord,
       getById,
+      reloadImage: loadImageFor,
     }),
-    [state.history, state.isHydrated, addRecord, updateRecord, deleteRecord, getById]
+    [state.history, state.isHydrated, addRecord, retryRecord, updateRecord, deleteRecord, getById, loadImageFor]
   )
 
   const projectsValue = useMemo<ProjectsContextValue>(
@@ -642,26 +807,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
 // ---- hooks ----
 
-function ctx<T>(c: React.Context<T | null>, name: string): T {
+function useRequiredContext<T>(c: React.Context<T | null>, name: string): T {
   const v = useContext(c)
   if (!v) throw new Error(`${name} must be used within AppStateProvider`)
   return v
 }
 
 export function useHistory(): HistoryContextValue {
-  return ctx(HistoryContext, "useHistory")
+  return useRequiredContext(HistoryContext, "useHistory")
 }
 export function useProjects(): ProjectsContextValue {
-  return ctx(ProjectsContext, "useProjects")
+  return useRequiredContext(ProjectsContext, "useProjects")
 }
 export function useConfig(): ConfigContextValue {
-  return ctx(ConfigContext, "useConfig")
+  return useRequiredContext(ConfigContext, "useConfig")
 }
 function useUI(): UIContextValue {
-  return ctx(UIContext, "useUI")
+  return useRequiredContext(UIContext, "useUI")
 }
 function useEvents(): EventLogContextValue {
-  return ctx(EventLogContext, "useEventLog")
+  return useRequiredContext(EventLogContext, "useEventLog")
 }
 
 export function useActiveHistory(): [number | null, (id: number | null) => void] {
@@ -707,20 +872,35 @@ export function useEventLog(): EventLogContextValue {
   return useEvents()
 }
 
+type SubmitResult =
+  | { ok: true; records: HistoryRecord[] }
+  | { ok: false; message: string }
+
 type UseGenerateReturn = {
   submit: (params: {
     prompt: string
-    ratio: string
-    pixels: string
+    imageParams: ImageParams
     referenceImages?: string[]
-  }) => Promise<void>
+  }) => Promise<SubmitResult>
   retry: (id: number) => Promise<void>
   isProcessing: boolean
+  runningCount: number
   waitingCount: number
 }
 
+function apiErrorMessage(error: ApiError): string {
+  const message = toUserFacingErrorMessage(
+    localizeErrorMessage(error.message) ?? error.message
+  )
+  if (!error.fields || Object.keys(error.fields).length === 0) return message
+  const fields = Object.entries(error.fields)
+    .map(([field, detail]) => `${field}: ${detail}`)
+    .join(", ")
+  return `${message}: ${fields}`
+}
+
 export function useGenerate(): UseGenerateReturn {
-  const { records, addRecord } = useHistory()
+  const { records, addRecord, retryRecord } = useHistory()
   const { config } = useConfig()
   const { setActive } = useUI()
   const { append: appendEvent, clear: clearEvents } = useEvents()
@@ -730,11 +910,8 @@ export function useGenerate(): UseGenerateReturn {
     recordsRef.current = records
   }, [records])
 
-  const isProcessing = useMemo(
-    () =>
-      records.some(
-        (r) => r.status === "running" || r.status === "waiting"
-      ),
+  const runningCount = useMemo(
+    () => records.filter((r) => r.status === "running").length,
     [records]
   )
 
@@ -743,33 +920,40 @@ export function useGenerate(): UseGenerateReturn {
     [records]
   )
 
+  const isProcessing = runningCount > 0 || waitingCount > 0
+
   const submit = useCallback<UseGenerateReturn["submit"]>(
-    async ({ prompt, ratio, pixels, referenceImages }) => {
+    async ({ prompt, imageParams, referenceImages }) => {
       if (!config.model) {
-        appendEvent("error", "请先选择模型")
-        return
+        const message = "请先选择模型"
+        appendEvent("error", message)
+        return { ok: false, message }
       }
       const busy = recordsRef.current.some(
         (r) => r.status === "running" || r.status === "waiting"
       )
       if (!busy) clearEvents()
-      appendEvent("info", `提交生成请求: ${prompt.slice(0, 60)}`)
+      appendEvent(
+        "info",
+        `提交生成请求: ${prompt.slice(0, 60)}`
+      )
       if (referenceImages && referenceImages.length > 0) {
         appendEvent("info", `附带 ${referenceImages.length} 张参考图`)
       }
       try {
-        const rec = await addRecord({
+        const record = await addRecord({
           prompt,
           model: config.model,
-          ratio,
-          pixels,
+          imageParams,
           referenceImages,
         })
-        setActive(rec.id)
+        setActive(record.id)
+        return { ok: true, records: [record] }
       } catch (err) {
         const message =
-          err instanceof ApiError ? err.message : "提交失败，请重试"
+          err instanceof ApiError ? apiErrorMessage(err) : "提交失败，请重试"
         appendEvent("error", message)
+        return { ok: false, message }
       }
     },
     [config.model, addRecord, setActive, appendEvent, clearEvents]
@@ -779,23 +963,12 @@ export function useGenerate(): UseGenerateReturn {
     async (id) => {
       const target = recordsRef.current.find((r) => r.id === id)
       if (!target) return
-      appendEvent("info", `重试记录 #${id}（创建新任务）`)
-      try {
-        const rec = await addRecord({
-          prompt: target.prompt,
-          model: target.model,
-          ratio: target.ratio,
-          pixels: target.pixels,
-          referenceImages: target.referenceImages,
-        })
-        setActive(rec.id)
-      } catch (err) {
-        const message = err instanceof ApiError ? err.message : "重试失败"
-        appendEvent("error", message)
-      }
+      appendEvent("info", `重试记录 #${id}`)
+      await retryRecord(id)
+      setActive(id)
     },
-    [addRecord, setActive, appendEvent]
+    [setActive, appendEvent, retryRecord]
   )
 
-  return { submit, retry, isProcessing, waitingCount }
+  return { submit, retry, isProcessing, runningCount, waitingCount }
 }

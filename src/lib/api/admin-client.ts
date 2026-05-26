@@ -20,6 +20,8 @@ export type TestConnectionResp = {
   ok: boolean
   status: number
   message?: string
+  elapsedMs?: number
+  imageBytes?: number
 }
 
 export const adminApi = {
@@ -41,9 +43,10 @@ export const adminApi = {
     )
     return data.config
   },
-  async testUpstream(): Promise<TestConnectionResp> {
+  async testUpstream(model?: string): Promise<TestConnectionResp> {
     const { data } = await apiClient.post<TestConnectionResp>(
-      "/api/v1/admin/upstream-configs/test"
+      "/api/v1/admin/upstream-configs/test",
+      model ? { model } : {}
     )
     return data
   },

@@ -2,17 +2,25 @@
 
 import * as React from "react"
 import { toast } from "sonner"
+import { Check, ChevronsUpDown, Loader2 } from "lucide-react"
 
 import { adminApi, type UpstreamConfigDTO } from "@/lib/api/admin-client"
 import { ApiError } from "@/lib/api/client"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PasswordInput } from "@/components/password-input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import { Spinner } from "@/components/ui/spinner"
+import { cn } from "@/lib/utils"
 
 export function UpstreamConfigCard() {
   const [config, setConfig] = React.useState<UpstreamConfigDTO | null>(null)
@@ -22,9 +30,22 @@ export function UpstreamConfigCard() {
 
   const [baseUrl, setBaseUrl] = React.useState("")
   const [apiKey, setApiKey] = React.useState("")
-  const [apiKeyDirty, setApiKeyDirty] = React.useState(false)
+  // Tracks the apiKey value initially loaded from the backend (masked). If the
+  // user leaves the field untouched we treat it as "no change" on save.
+  const initialApiKeyRef = React.useRef("")
   const [models, setModels] = React.useState("")
   const [concurrency, setConcurrency] = React.useState(4)
+  const [testModel, setTestModel] = React.useState<string>("")
+  const [testModelOpen, setTestModelOpen] = React.useState(false)
+
+  const enabledModelsList = React.useMemo(
+    () =>
+      models
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [models]
+  )
 
   const reload = React.useCallback(async () => {
     setLoading(true)
@@ -34,11 +55,18 @@ export function UpstreamConfigCard() {
         adminApi.getRuntime(),
       ])
       setConfig(cfg)
-      setBaseUrl(cfg.baseUrl)
-      setModels(cfg.enabledModels.join(", "))
+      setBaseUrl(cfg.baseUrl ?? "")
+      setModels((cfg.enabledModels ?? []).join(", "))
       setConcurrency(rt.workerConcurrency)
-      setApiKey("")
-      setApiKeyDirty(false)
+      const initial = cfg.apiKeyMasked ?? ""
+      setApiKey(initial)
+      initialApiKeyRef.current = initial
+      if (cfg.enabledModels && cfg.enabledModels.length > 0) {
+        const preferred = cfg.enabledModels.includes("gpt-image-2")
+          ? "gpt-image-2"
+          : cfg.enabledModels[0]
+        setTestModel((cur) => cur || preferred || "")
+      }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "加载失败")
     } finally {
@@ -53,44 +81,51 @@ export function UpstreamConfigCard() {
   const handleSave = React.useCallback(async () => {
     setSaving(true)
     try {
-      const enabledModels = models
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
       const payload: Parameters<typeof adminApi.updateUpstream>[0] = {
         baseUrl,
-        enabledModels,
+        enabledModels: enabledModelsList,
       }
-      if (apiKeyDirty) {
+      // Treat the field as unchanged if it still matches whatever was last
+      // loaded; only send apiKey when the user actually edited it.
+      if (apiKey !== initialApiKeyRef.current) {
         payload.apiKey = apiKey === "" ? null : apiKey
       }
       const next = await adminApi.updateUpstream(payload)
       setConfig(next)
-      setApiKey("")
-      setApiKeyDirty(false)
+      // Keep the visible input value untouched (so the user still sees the key
+      // they just typed). Page-refresh will fall back to the masked value from
+      // the backend.
+      initialApiKeyRef.current = apiKey
       toast.success("已保存上游配置")
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "保存失败")
     } finally {
       setSaving(false)
     }
-  }, [baseUrl, apiKey, apiKeyDirty, models])
+  }, [baseUrl, apiKey, enabledModelsList])
 
   const handleTest = React.useCallback(async () => {
     setTesting(true)
     try {
-      const res = await adminApi.testUpstream()
+      const res = await adminApi.testUpstream(testModel || undefined)
       if (res.ok) {
-        toast.success("上游连通性正常")
+        const parts: string[] = []
+        if (res.elapsedMs) parts.push(`${(res.elapsedMs / 1000).toFixed(1)}s`)
+        if (res.imageBytes)
+          parts.push(`${Math.round(res.imageBytes / 1024)} KB`)
+        const detail = parts.length > 0 ? ` (${parts.join(", ")})` : ""
+        toast.success(`上游可用${detail}`)
       } else {
-        toast.error(`连接失败: ${res.message || `HTTP ${res.status}`}`)
+        toast.error(`连接失败: ${res.message || `HTTP ${res.status}`}`, {
+          duration: 8000,
+        })
       }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "测试失败")
     } finally {
       setTesting(false)
     }
-  }, [])
+  }, [testModel])
 
   const handleConcurrency = React.useCallback(async (value: number) => {
     setConcurrency(value)
@@ -118,7 +153,7 @@ export function UpstreamConfigCard() {
         <div>
           <h3 className="text-base font-semibold">上游 OpenAI 兼容接口</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            所有用户的生图请求都通过此配置发往上游；API Key 加密存储，不会返回原值。
+            所有用户的生图请求都通过此配置发往上游；API Key 加密存储，不会以原值返回。
           </p>
         </div>
         <div className="grid gap-1.5">
@@ -131,22 +166,12 @@ export function UpstreamConfigCard() {
           />
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor="upstream-apikey">
-            API Key
-            {config?.apiKeySet ? (
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                当前: {config.apiKeyMasked}
-              </span>
-            ) : null}
-          </Label>
+          <Label htmlFor="upstream-apikey">API Key</Label>
           <PasswordInput
             id="upstream-apikey"
-            placeholder={config?.apiKeySet ? "留空则保持不变" : "sk-..."}
+            placeholder="sk-..."
             value={apiKey}
-            onChange={(e) => {
-              setApiKey(e.target.value)
-              setApiKeyDirty(true)
-            }}
+            onChange={(e) => setApiKey(e.target.value)}
           />
         </div>
         <div className="grid gap-1.5">
@@ -163,12 +188,60 @@ export function UpstreamConfigCard() {
             {saving ? <Spinner /> : null}
             {saving ? "保存中..." : "保存"}
           </Button>
-          <Button variant="outline" onClick={handleTest} disabled={testing}>
-            {testing ? <Spinner /> : null}
-            {testing ? "测试中..." : "测试连通性"}
-          </Button>
           <Button variant="ghost" onClick={() => void reload()}>
             重置
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="gap-4 p-6">
+        <div>
+          <h3 className="text-base font-semibold">连通性测试</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            选择一个已启用的模型，会真实调用一次最小生图请求验证全链路（约 10–30s）。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <DropdownMenu open={testModelOpen} onOpenChange={setTestModelOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="w-60 justify-between font-normal"
+                disabled={enabledModelsList.length === 0}
+              >
+                {testModel ? (
+                  testModel
+                ) : (
+                  <span className="text-muted-foreground">
+                    {enabledModelsList.length === 0
+                      ? "请先填写启用模型并保存"
+                      : "选择测试模型"}
+                  </span>
+                )}
+                <ChevronsUpDown className="opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-60" align="start">
+              {enabledModelsList.map((m) => (
+                <DropdownMenuItem key={m} onSelect={() => setTestModel(m)}>
+                  <span>{m}</span>
+                  <Check
+                    className={cn(
+                      "ml-auto",
+                      testModel === m ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            onClick={handleTest}
+            disabled={testing || enabledModelsList.length === 0 || !testModel}
+          >
+            {testing ? <Loader2 className="size-4 animate-spin" /> : null}
+            {testing ? "调用中…(约 10–30s)" : "测试连通性"}
           </Button>
         </div>
       </Card>

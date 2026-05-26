@@ -30,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { toUserFacingErrorMessage } from "@/lib/api/errors"
 import { useMotionVariants } from "@/lib/motion"
 import type {
   HistoryRecord,
@@ -220,10 +221,12 @@ function LogRow({
         {record.error ? (
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
-              <span className="truncate text-xs">{record.error}</span>
+              <span className="truncate text-xs">
+                {toUserFacingErrorMessage(record.error)}
+              </span>
             </TooltipTrigger>
             <TooltipContent className="max-w-[40ch] whitespace-pre-wrap">
-              {record.error}
+              {toUserFacingErrorMessage(record.error)}
             </TooltipContent>
           </Tooltip>
         ) : (

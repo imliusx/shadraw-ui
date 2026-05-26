@@ -2,14 +2,36 @@ export type ApiStatus = "idle" | "testing" | "success" | "error"
 
 export type HistoryStatus = "waiting" | "running" | "completed" | "failed"
 
+export type ImageBackground = "auto" | "transparent" | "opaque"
+export type ImageModeration = "auto" | "low"
+export type ImageOutputFormat = "png" | "jpeg" | "webp"
+export type ImageQuality = "auto" | "high" | "medium" | "low"
+
+export type ImageParams = {
+  size: string
+  quality: ImageQuality
+  background: ImageBackground
+  moderation: ImageModeration
+  output_format: ImageOutputFormat
+  output_compression?: number
+  stream?: boolean
+  partial_images?: number
+  input_fidelity?: string
+  mask?: string
+  response_format?: string
+  style?: string
+  user?: string
+}
+
 export type HistoryRecord = {
   id: number
   prompt: string
   model: string
-  ratio: string
-  pixels: string
+  imageParams: ImageParams
   status: HistoryStatus
   base64?: string
+  /** 仅前端使用：图片下载失败的错误描述。set 后 UI 会显示"重试" */
+  imageError?: string
   referenceImages?: string[]
   error?: string
   favorite: boolean

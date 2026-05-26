@@ -54,6 +54,59 @@ function extractApiCode(body?: string): string {
   return ""
 }
 
+function isSafetyRejection(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes("moderation_blocked") ||
+    normalized.includes("content_policy_violation") ||
+    normalized.includes("image_generation_user_error") ||
+    normalized.includes("rejected by the safety system")
+  )
+}
+
+export function toUserFacingErrorMessage(message?: string): string {
+  if (!message) return "请求失败"
+  const safetyMessage = localizeErrorMessage(message)
+  if (safetyMessage && safetyMessage !== message) return safetyMessage
+
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes("upstream_error") ||
+    normalized.includes("upstream request failed")
+  ) {
+    return "上游服务暂时无法完成生成，请稍后重试"
+  }
+  if (
+    normalized.includes("auth_failed") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid api key")
+  ) {
+    return "上游认证失败，请检查后台上游配置"
+  }
+  if (
+    normalized.includes("rate_limited") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests")
+  ) {
+    return "上游请求过于频繁，请稍后重试"
+  }
+  if (normalized.includes("not_found") || normalized.includes("404")) {
+    return "上游接口或模型不存在，请检查后台上游配置"
+  }
+  if (normalized.includes("network")) {
+    return "无法连接上游服务，请稍后重试"
+  }
+  return message
+}
+
+export function localizeErrorMessage(message?: string): string | undefined {
+  if (!message) return undefined
+  if (isSafetyRejection(message)) {
+    return "提示词被安全策略拦截，请调整提示词后重试"
+  }
+  return message
+}
+
 export function classifyError(error: unknown): ClassifiedError {
   if (
     error instanceof DOMException &&
@@ -81,10 +134,7 @@ export function classifyError(error: unknown): ClassifiedError {
     const apiMsg = extractApiMessage(error.body)
     const apiCode = extractApiCode(error.body)
     if (error.status === 400) {
-      if (
-        apiCode === "moderation_blocked" ||
-        apiCode === "content_policy_violation"
-      ) {
+      if (isSafetyRejection(`${apiCode} ${apiMsg} ${error.body ?? ""}`)) {
         return {
           title: "提示词被安全策略拦截",
           description:

@@ -69,6 +69,7 @@ import {
 import type {
   HistoryRecord,
   HistoryStatus,
+  ImageParams,
   Project,
 } from "@/components/workbench/types"
 import { TabFade } from "@/components/motion/tab-fade"
@@ -81,14 +82,12 @@ type ProjectFilter = number | null | undefined
 
 type LibraryPanelProps = {
   setPrompt: (value: string) => void
-  setRatio: (value: string) => void
-  setPixels: (value: string) => void
+  setImageParams: React.Dispatch<React.SetStateAction<ImageParams>>
 }
 
 export function LibraryPanel({
   setPrompt,
-  setRatio,
-  setPixels,
+  setImageParams,
 }: LibraryPanelProps) {
   const { records, updateRecord, deleteRecord } = useHistory()
   const { projects, addProject, renameProject, deleteProject } = useProjects()
@@ -107,6 +106,8 @@ export function LibraryPanel({
 
   const [deleteRecordTarget, setDeleteRecordTarget] = React.useState<HistoryRecord | null>(null)
   const [deleteProjectTarget, setDeleteProjectTarget] = React.useState<Project | null>(null)
+  const [cancelRecordTarget, setCancelRecordTarget] =
+    React.useState<HistoryRecord | null>(null)
 
   const filteredHistory = React.useMemo(() => {
     const query = deferredQuery.trim().toLowerCase()
@@ -149,11 +150,10 @@ export function LibraryPanel({
   const handleReuse = React.useCallback(
     (record: HistoryRecord) => {
       setPrompt(record.prompt)
-      setRatio(record.ratio)
-      setPixels(record.pixels)
+      setImageParams(record.imageParams)
       toast.success("提示词已复用")
     },
-    [setPrompt, setRatio, setPixels]
+    [setPrompt, setImageParams]
   )
 
   const handleSelect = React.useCallback(
@@ -163,12 +163,11 @@ export function LibraryPanel({
     [setActiveHistoryId]
   )
 
-  const handleCancelWaiting = React.useCallback(
-    async (record: HistoryRecord) => {
-      await deleteRecord(record.id)
-      toast.info("已取消")
+  const handleRequestCancel = React.useCallback(
+    (record: HistoryRecord) => {
+      setCancelRecordTarget(record)
     },
-    [deleteRecord]
+    []
   )
 
   const handleCopyPrompt = React.useCallback(async (record: HistoryRecord) => {
@@ -198,8 +197,12 @@ export function LibraryPanel({
 
   const handleRetry = React.useCallback(
     async (record: HistoryRecord) => {
-      toast.success("已重新加入队列")
-      await retry(record.id)
+      try {
+        await retry(record.id)
+        toast.success("已重新加入队列")
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "重试失败")
+      }
     },
     [retry]
   )
@@ -210,6 +213,17 @@ export function LibraryPanel({
     setDeleteRecordTarget(null)
     toast.success("已删除")
   }, [deleteRecord, deleteRecordTarget])
+
+  const confirmCancelRecord = React.useCallback(async () => {
+    if (!cancelRecordTarget) return
+    await deleteRecord(cancelRecordTarget.id)
+    setCancelRecordTarget(null)
+    toast.info(
+      cancelRecordTarget.status === "running"
+        ? "已取消生成任务"
+        : "已取消排队任务"
+    )
+  }, [cancelRecordTarget, deleteRecord])
 
   const confirmDeleteProject = React.useCallback(async () => {
     if (!deleteProjectTarget) return
@@ -335,7 +349,7 @@ export function LibraryPanel({
                         projects={projects}
                         onSelect={handleSelect}
                         onReuse={handleReuse}
-                        onCancelWaiting={handleCancelWaiting}
+                        onCancelWaiting={handleRequestCancel}
                         onRequestDelete={setDeleteRecordTarget}
                         onCopyPrompt={handleCopyPrompt}
                         onToggleFavorite={handleToggleFavorite}
@@ -415,7 +429,7 @@ export function LibraryPanel({
                         projects={projects}
                         onSelect={handleSelect}
                         onReuse={handleReuse}
-                        onCancelWaiting={handleCancelWaiting}
+                        onCancelWaiting={handleRequestCancel}
                         onRequestDelete={setDeleteRecordTarget}
                         onCopyPrompt={handleCopyPrompt}
                         onToggleFavorite={handleToggleFavorite}
@@ -527,6 +541,37 @@ export function LibraryPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog
+        open={cancelRecordTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setCancelRecordTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {cancelRecordTarget?.status === "running"
+                ? "确认取消生成任务?"
+                : "确认取消排队任务?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancelRecordTarget?.status === "running"
+                ? "任务已经开始运行，取消后会从当前列表移除。上游请求可能已经发出，不一定能立即停止。"
+                : "任务还在排队中，取消后会从当前列表移除。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续等待</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={confirmCancelRecord}
+            >
+              取消任务
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </motion.aside>
   )
 }
@@ -590,7 +635,8 @@ function HistoryCard({
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex items-center gap-2 pr-20 text-xs text-muted-foreground">
             <span className="truncate">
-              {record.model} · {record.pixels} · {record.ratio}
+              {record.model} · {record.imageParams.quality} ·{" "}
+              {record.imageParams.size}
             </span>
           </div>
           <p className="truncate text-sm font-medium leading-5">
@@ -615,7 +661,17 @@ function HistoryCard({
           onRequestDelete={onRequestDelete}
         />
         <span className="shrink-0 truncate">
-          {formatRelativeTime(record.createdAt)}
+          {record.status === "waiting" || record.status === "running" ? (
+            <LiveElapsed
+              startMs={
+                record.status === "running" && record.startedAt
+                  ? record.startedAt
+                  : record.createdAt
+              }
+            />
+          ) : (
+            formatRelativeTime(record.createdAt)
+          )}
         </span>
       </div>
     </motion.div>
@@ -753,7 +809,7 @@ function HistoryThumbnail({ record }: { record: HistoryRecord }) {
     return (
       <div className="relative size-12 shrink-0 overflow-hidden rounded-lg bg-muted">
         <img
-          src={`data:image/png;base64,${record.base64}`}
+          src={record.base64}
           alt=""
           className="size-full object-cover"
         />
@@ -969,4 +1025,24 @@ function formatRelativeTime(timestamp: number): string {
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days} 天前`
   return new Date(timestamp).toLocaleDateString()
+}
+
+function LiveElapsed({ startMs }: { startMs: number }) {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [startMs])
+  return (
+    <span className="tabular-nums">
+      {formatElapsedTime(now - startMs)}
+    </span>
+  )
+}
+
+function formatElapsedTime(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} 秒`
 }

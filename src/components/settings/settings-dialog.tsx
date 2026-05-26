@@ -21,9 +21,7 @@ export function SettingsDialog() {
       >
         <DialogHeader className="sr-only">
           <DialogTitle>设置</DialogTitle>
-          <DialogDescription>
-            管理生图服务连接与个性化偏好
-          </DialogDescription>
+          <DialogDescription>管理账户与个性化偏好</DialogDescription>
         </DialogHeader>
         <div className="flex-1 min-h-0 p-8 pb-10">
           <SettingsContent variant="dialog" />

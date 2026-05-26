@@ -2,13 +2,33 @@ import { apiClient, type ApiResponse } from "./client"
 
 export type RecordStatus = "waiting" | "running" | "completed" | "failed"
 
+export type ImageBackground = "auto" | "transparent" | "opaque"
+export type ImageModeration = "auto" | "low"
+export type ImageOutputFormat = "png" | "jpeg" | "webp"
+export type ImageQuality = "auto" | "high" | "medium" | "low"
+
+export type ImageParams = {
+  size?: string
+  quality?: ImageQuality
+  background?: ImageBackground
+  moderation?: ImageModeration
+  output_format?: ImageOutputFormat
+  output_compression?: number
+  stream?: boolean
+  partial_images?: number
+  input_fidelity?: string
+  mask?: string
+  response_format?: string
+  style?: string
+  user?: string
+}
+
 export type RecordDTO = {
   id: string
   uuid: string
   prompt: string
   model: string
-  ratio: string
-  pixels: string
+  imageParams: ImageParams
   status: RecordStatus
   favorite: boolean
   hasImage: boolean
@@ -23,8 +43,7 @@ export type RecordDTO = {
 export type CreateRecordPayload = {
   prompt: string
   model: string
-  ratio: string
-  pixels: string
+  imageParams: ImageParams
   projectId?: string | null
   referenceImages?: string[] // data: URLs
 }
@@ -76,6 +95,13 @@ export const recordsApi = {
     const { data } = await apiClient.patch<{ record: RecordDTO }>(
       `/api/v1/records/${id}`,
       body
+    )
+    return data.record
+  },
+
+  async retry(id: string): Promise<RecordDTO> {
+    const { data } = await apiClient.post<{ record: RecordDTO }>(
+      `/api/v1/records/${id}/retry`
     )
     return data.record
   },

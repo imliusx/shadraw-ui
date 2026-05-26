@@ -3,7 +3,8 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { AnimatePresence, motion } from "motion/react"
+import { motion } from "motion/react"
+import { MasonryPhotoAlbum, type Photo } from "react-photo-album"
 import {
   Archive,
   FileText,
@@ -66,6 +67,16 @@ import { cn } from "@/lib/utils"
 
 type GalleryTab = "all" | "favorites" | "projects"
 
+type GalleryPhoto = Photo & {
+  record: HistoryRecord
+}
+
+type NaturalImageSize = {
+  src: string
+  width: number
+  height: number
+}
+
 export function GalleryView() {
   const { records, deleteRecord, updateRecord } = useHistory()
   const { projects } = useProjects()
@@ -83,7 +94,7 @@ export function GalleryView() {
     () =>
       [...records]
         .filter((record) => record.status === "completed")
-        .sort((a, b) => b.id - a.id),
+        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id),
     [records]
   )
 
@@ -151,23 +162,17 @@ export function GalleryView() {
     [openWith]
   )
 
-  const { listContainer } = useMotionVariants()
-
-  const renderCards = (list: HistoryRecord[]) => (
-    <AnimatePresence initial={false}>
-      {list.map((record) => (
-        <GalleryCard
-          key={record.id}
-          record={record}
-          projects={sortedProjects}
-          onOpen={(target) => handleOpenLightbox(target, list)}
-          onReuse={handleReuse}
-          onMoveToProject={handleMoveToProject}
-          onToggleFavorite={handleToggleFavorite}
-          onRequestDelete={setDeleteTarget}
-        />
-      ))}
-    </AnimatePresence>
+  const renderAlbum = (list: HistoryRecord[], className?: string) => (
+    <GalleryAlbum
+      list={list}
+      projects={sortedProjects}
+      className={className}
+      onOpen={handleOpenLightbox}
+      onReuse={handleReuse}
+      onMoveToProject={handleMoveToProject}
+      onToggleFavorite={handleToggleFavorite}
+      onRequestDelete={setDeleteTarget}
+    />
   )
 
   const projectSections = React.useMemo(() => {
@@ -207,14 +212,7 @@ export function GalleryView() {
   if (tab === "all") {
     content =
       allList.length > 0 ? (
-        <motion.div
-          variants={listContainer}
-          initial="hidden"
-          animate="show"
-          className="columns-2 gap-4 p-4 sm:columns-3 lg:columns-4 xl:columns-5"
-        >
-          {renderCards(allList)}
-        </motion.div>
+        renderAlbum(allList, "p-3")
       ) : (
         <EmptyArea
           deferredQuery={deferredQuery}
@@ -226,14 +224,7 @@ export function GalleryView() {
   } else if (tab === "favorites") {
     content =
       favoritesList.length > 0 ? (
-        <motion.div
-          variants={listContainer}
-          initial="hidden"
-          animate="show"
-          className="columns-2 gap-4 p-4 sm:columns-3 lg:columns-4 xl:columns-5"
-        >
-          {renderCards(favoritesList)}
-        </motion.div>
+        renderAlbum(favoritesList, "p-3")
       ) : (
         <EmptyArea
           deferredQuery={deferredQuery}
@@ -255,14 +246,7 @@ export function GalleryView() {
               <h2 className="flex items-center gap-2 px-4 pb-2 pt-4 text-sm font-medium">
                 {section.name}
               </h2>
-              <motion.div
-                variants={listContainer}
-                initial="hidden"
-                animate="show"
-                className="columns-2 gap-4 px-4 pb-4 sm:columns-3 lg:columns-4 xl:columns-5"
-              >
-                {renderCards(section.list)}
-              </motion.div>
+              {renderAlbum(section.list, "px-3 pb-3")}
             </section>
           ))}
         </div>
@@ -333,9 +317,159 @@ export function GalleryView() {
   )
 }
 
+type GalleryAlbumProps = {
+  list: HistoryRecord[]
+  projects: Project[]
+  className?: string
+  onOpen: (record: HistoryRecord, navList: HistoryRecord[]) => void
+  onReuse: (record: HistoryRecord) => void
+  onMoveToProject: (
+    record: HistoryRecord,
+    projectId: number | undefined
+  ) => void
+  onToggleFavorite: (record: HistoryRecord) => void
+  onRequestDelete: (record: HistoryRecord) => void
+}
+
+function GalleryAlbum({
+  list,
+  projects,
+  className,
+  onOpen,
+  onReuse,
+  onMoveToProject,
+  onToggleFavorite,
+  onRequestDelete,
+}: GalleryAlbumProps) {
+  const [naturalSizes, setNaturalSizes] = React.useState<
+    Map<number, NaturalImageSize>
+  >(() => new Map())
+
+  React.useEffect(() => {
+    let cancelled = false
+    const loaders: HTMLImageElement[] = []
+
+    for (const record of list) {
+      const src = record.base64
+      if (!src) continue
+
+      const image = new Image()
+      loaders.push(image)
+      image.onload = () => {
+        if (
+          cancelled ||
+          image.naturalWidth <= 0 ||
+          image.naturalHeight <= 0
+        ) {
+          return
+        }
+
+        setNaturalSizes((current) => {
+          const previous = current.get(record.id)
+          if (
+            previous &&
+            previous.src === src &&
+            previous.width === image.naturalWidth &&
+            previous.height === image.naturalHeight
+          ) {
+            return current
+          }
+
+          const next = new Map(current)
+          next.set(record.id, {
+            src,
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+          })
+          return next
+        })
+      }
+      image.src = src
+    }
+
+    return () => {
+      cancelled = true
+      for (const image of loaders) {
+        image.onload = null
+      }
+    }
+  }, [list])
+
+  const photos = React.useMemo(
+    () =>
+      list.map((record) => {
+        const size = naturalSizes.get(record.id)
+        const [width, height] =
+          size && size.src === record.base64
+            ? [size.width, size.height]
+            : imageSizeToDimensions(record.imageParams.size)
+        return {
+          key: String(record.id),
+          src: record.base64 ?? "",
+          alt: record.prompt.slice(0, 40),
+          width,
+          height,
+          record,
+        } satisfies GalleryPhoto
+      }),
+    [list, naturalSizes]
+  )
+
+  return (
+    <div className={cn("w-full", className)}>
+      <MasonryPhotoAlbum
+        photos={photos}
+        spacing={6}
+        padding={0}
+        columns={(containerWidth) => {
+          if (containerWidth < 640) return 2
+          if (containerWidth < 1024) return 3
+          if (containerWidth < 1280) return 4
+          return 5
+        }}
+        sizes={{
+          size: "calc((100vw - 36px) / 2)",
+          sizes: [
+            {
+              viewport: "(min-width: 640px)",
+              size: "calc((100vw - 48px) / 3)",
+            },
+            {
+              viewport: "(min-width: 1024px)",
+              size: "calc((100vw - 60px) / 4)",
+            },
+            {
+              viewport: "(min-width: 1280px)",
+              size: "240px",
+            },
+          ],
+        }}
+        render={{
+          photo: (_props, { photo, width, height }) => (
+            <GalleryCard
+              key={photo.key}
+              record={photo.record}
+              projects={projects}
+              width={width}
+              height={height}
+              onOpen={(target) => onOpen(target, list)}
+              onReuse={onReuse}
+              onMoveToProject={onMoveToProject}
+              onToggleFavorite={onToggleFavorite}
+              onRequestDelete={onRequestDelete}
+            />
+          ),
+        }}
+      />
+    </div>
+  )
+}
+
 type GalleryCardProps = {
   record: HistoryRecord
   projects: Project[]
+  width: number
+  height: number
   onOpen: (record: HistoryRecord) => void
   onReuse: (record: HistoryRecord) => void
   onMoveToProject: (
@@ -349,6 +483,8 @@ type GalleryCardProps = {
 function GalleryCard({
   record,
   projects,
+  width,
+  height,
   onOpen,
   onReuse,
   onMoveToProject,
@@ -364,19 +500,20 @@ function GalleryCard({
       animate="show"
       exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.18 } }}
       whileHover={{ y: -2, transition: { duration: 0.18 } }}
-      className="group relative mb-4 break-inside-avoid overflow-hidden rounded-lg border bg-card"
+      className="group relative overflow-hidden border bg-card"
+      style={{ width, height }}
     >
       <button
         type="button"
         onClick={() => onOpen(record)}
-        className="block w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label="预览图片"
       >
         {record.base64 ? (
           <img
-            src={`data:image/png;base64,${record.base64}`}
+            src={record.base64}
             alt={record.prompt.slice(0, 40)}
-            className="block w-full transition group-hover:scale-105"
+            className="block size-full object-contain"
           />
         ) : (
           <div className="flex aspect-square w-full items-center justify-center bg-muted text-muted-foreground">
@@ -520,6 +657,12 @@ function GalleryCard({
       </div>
     </motion.div>
   )
+}
+
+function imageSizeToDimensions(size: string): [number, number] {
+  const parts = size.split("x").map(Number)
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return [1, 1]
+  return [parts[0], parts[1]]
 }
 
 function EmptyArea({

@@ -27,14 +27,15 @@ import {
   useActiveHistory,
   useHistory,
 } from "@/app/providers/app-state-provider"
+import { DEFAULT_IMAGE_PARAMS } from "@/components/workbench/data"
+import type { ImageParams } from "@/components/workbench/types"
 
 const DEFAULT_STAGE_LAYOUT = { preview: 70, controls: 30 }
 
 export function ImageWorkbench() {
   const [prompt, setPrompt] = React.useState("")
-  const [ratio, setRatio] = React.useState("auto")
-  const [pixels, setPixels] = React.useState("2K")
-  const [count, setCount] = React.useState(1)
+  const [imageParams, setImageParams] =
+    React.useState<ImageParams>(DEFAULT_IMAGE_PARAMS)
   const [referenceImages, setReferenceImages] = React.useState<string[]>([])
   const [stageLayouts, setStageLayouts] = React.useState<Record<string, Layout>>({})
 
@@ -80,8 +81,7 @@ export function ImageWorkbench() {
         >
           <PreviewStage
             setPrompt={setPrompt}
-            setRatio={setRatio}
-            setPixels={setPixels}
+            setImageParams={setImageParams}
           />
         </ResizablePanel>
         <ResizableHandle withHandle />
@@ -95,12 +95,8 @@ export function ImageWorkbench() {
           <ControlPanel
             prompt={prompt}
             setPrompt={setPrompt}
-            ratio={ratio}
-            setRatio={setRatio}
-            pixels={pixels}
-            setPixels={setPixels}
-            count={count}
-            setCount={setCount}
+            imageParams={imageParams}
+            setImageParams={setImageParams}
             referenceImages={referenceImages}
             setReferenceImages={setReferenceImages}
           />
@@ -132,8 +128,7 @@ export function ImageWorkbench() {
             </SheetHeader>
             <LibraryPanel
               setPrompt={setPrompt}
-              setRatio={setRatio}
-              setPixels={setPixels}
+              setImageParams={setImageParams}
             />
           </SheetContent>
         </Sheet>
@@ -162,8 +157,7 @@ export function ImageWorkbench() {
         >
           <LibraryPanel
             setPrompt={setPrompt}
-            setRatio={setRatio}
-            setPixels={setPixels}
+            setImageParams={setImageParams}
           />
         </ResizablePanel>
         <ResizableHandle withHandle />

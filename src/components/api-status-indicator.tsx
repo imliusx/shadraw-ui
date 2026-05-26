@@ -1,10 +1,6 @@
 "use client"
 
-import {
-  useApiStatus,
-  useSettingsDialog,
-} from "@/app/providers/app-state-provider"
-import { Button } from "@/components/ui/button"
+import { useApiStatus } from "@/app/providers/app-state-provider"
 import {
   Tooltip,
   TooltipContent,
@@ -34,7 +30,6 @@ const STATUS_CONFIG = {
 
 export function ApiStatusIndicator() {
   const { status, errorMessage } = useApiStatus()
-  const { openSettings } = useSettingsDialog()
   const current = STATUS_CONFIG[status]
 
   const truncated =
@@ -47,12 +42,10 @@ export function ApiStatusIndicator() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={openSettings}
-          aria-label={`API 状态: ${current.label},点击修改配置`}
+        <div
+          role="status"
+          aria-label={`API 状态: ${current.label}`}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md"
         >
           <span className="relative flex size-2">
             <span
@@ -68,14 +61,13 @@ export function ApiStatusIndicator() {
               )}
             />
           </span>
-        </Button>
+        </div>
       </TooltipTrigger>
       <TooltipContent>
         {current.label}
         {truncated ? (
           <span className="block opacity-70">{truncated}</span>
         ) : null}
-        <span className="block opacity-70">点击修改配置</span>
       </TooltipContent>
     </Tooltip>
   )

@@ -1,30 +1,23 @@
-export const ratios = [
-  {
-    label: "auto",
-    previewClassName: "aspect-square h-[min(70cqh,70cqw)]",
-  },
-  {
-    label: "1:1",
-    previewClassName: "aspect-square h-[min(70cqh,70cqw)]",
-  },
-  {
-    label: "3:4",
-    previewClassName: "aspect-[3/4] h-[min(76cqh,100cqw)]",
-  },
-  {
-    label: "4:3",
-    previewClassName: "aspect-[4/3] w-[min(86cqw,calc(76cqh*1.333))]",
-  },
-  {
-    label: "9:16",
-    previewClassName: "aspect-[9/16] h-[min(76cqh,100cqw)]",
-  },
-  {
-    label: "16:9",
-    previewClassName: "aspect-video w-[min(86cqw,calc(76cqh*1.778))]",
-  },
+import type { ImageParams } from "./types"
+
+export const DEFAULT_IMAGE_PARAMS: ImageParams = {
+  size: "auto",
+  quality: "auto",
+  background: "auto",
+  moderation: "auto",
+  output_format: "png",
+}
+
+export const sizeOptions = [
+  "auto",
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "4096x4096",
 ]
 
-export const pixelOptions = ["1K", "2K", "4K"]
-
-export const countOptions = [1, 2, 3, 4, 5, 6]
+export const qualityOptions = ["auto", "high", "medium", "low"] as const
+export const backgroundOptions = ["auto", "transparent", "opaque"] as const
+export const moderationOptions = ["auto", "low"] as const
+export const outputFormatOptions = ["png", "jpeg", "webp"] as const

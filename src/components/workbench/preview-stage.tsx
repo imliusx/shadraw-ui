@@ -20,6 +20,7 @@ import {
   useHistory,
   useLightbox,
 } from "@/app/providers/app-state-provider"
+import { toUserFacingErrorMessage } from "@/lib/api/errors"
 import { Button } from "@/components/ui/button"
 import {
   Popover,
@@ -33,22 +34,20 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useMotionVariants } from "@/lib/motion"
-import type { HistoryRecord } from "@/components/workbench/types"
+import type { HistoryRecord, ImageParams } from "@/components/workbench/types"
 import { cn } from "@/lib/utils"
 
 type PreviewStageProps = {
   setPrompt: (value: string) => void
-  setRatio: (value: string) => void
-  setPixels: (value: string) => void
+  setImageParams: React.Dispatch<React.SetStateAction<ImageParams>>
 }
 
 export function PreviewStage({
   setPrompt,
-  setRatio,
-  setPixels,
+  setImageParams,
 }: PreviewStageProps) {
   const [activeId] = useActiveHistory()
-  const { getById, updateRecord } = useHistory()
+  const { getById, updateRecord, reloadImage } = useHistory()
   const { openWith } = useLightbox()
   const { submit, retry } = useGenerate()
 
@@ -57,25 +56,33 @@ export function PreviewStage({
   const handleReuse = React.useCallback(() => {
     if (!record) return
     setPrompt(record.prompt)
-    setRatio(record.ratio)
-    setPixels(record.pixels)
+    setImageParams(record.imageParams)
     toast.success("提示词已复用")
-  }, [record, setPrompt, setRatio, setPixels])
+  }, [record, setPrompt, setImageParams])
 
   const handleRegenerate = React.useCallback(() => {
     if (!record) return
-    toast.info("已提交新生成请求")
     void submit({
       prompt: record.prompt,
-      ratio: record.ratio,
-      pixels: record.pixels,
+      imageParams: record.imageParams,
+    }).then((result) => {
+      if (result.ok) {
+        toast.success("已提交新生成请求")
+      } else {
+        toast.error(result.message)
+      }
     })
   }, [record, submit])
 
   const handleRetry = React.useCallback(() => {
     if (!record) return
-    toast.success("已重新加入队列")
     void retry(record.id)
+      .then(() => {
+        toast.success("已重新加入队列")
+      })
+      .catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "重试失败")
+      })
   }, [record, retry])
 
   const handleDownload = React.useCallback(() => {
@@ -85,7 +92,7 @@ export function PreviewStage({
       .replace(/[:.]/g, "-")
       .slice(0, 15)
     const link = document.createElement("a")
-    link.href = `data:image/png;base64,${record.base64}`
+    link.href = record.base64
     link.download = `shadraw-${stamp}-${record.id}.png`
     document.body.appendChild(link)
     link.click()
@@ -111,8 +118,13 @@ export function PreviewStage({
 
   const handleOpenLightbox = React.useCallback(() => {
     if (!record) return
-    openWith(record.id)
+    openWith(record.id, null)
   }, [openWith, record])
+
+  const handleReloadImage = React.useCallback(() => {
+    if (!record) return
+    void reloadImage(record.id)
+  }, [record, reloadImage])
 
   const stageKey = !record
     ? "empty"
@@ -122,7 +134,9 @@ export function PreviewStage({
         ? `failed-${record.id}`
         : record.base64
           ? `completed-${record.id}`
-          : "empty"
+          : record.imageError
+            ? `image-error-${record.id}`
+            : `loading-${record.id}`
 
   return (
     <section className="flex h-full min-w-0 flex-col bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--foreground)_14%,transparent)_1px,transparent_0)] bg-[size:22px_22px]">
@@ -146,8 +160,19 @@ export function PreviewStage({
           >
             {!record ? (
               <EmptyStageState />
-            ) : record.status === "waiting" || record.status === "running" ? (
-              <GeneratingState />
+            ) : record.status === "waiting" ||
+              record.status === "running" ||
+              (record.status === "completed" &&
+                !record.base64 &&
+                !record.imageError) ? (
+              <GeneratingState record={record} />
+            ) : record.status === "completed" &&
+              !record.base64 &&
+              record.imageError ? (
+              <ImageLoadFailedState
+                error={record.imageError}
+                onRetry={handleReloadImage}
+              />
             ) : record.status === "failed" ? (
               <FailedState
                 record={record}
@@ -173,14 +198,66 @@ export function PreviewStage({
   )
 }
 
-function GeneratingState() {
+function GeneratingState({ record }: { record: HistoryRecord }) {
+  const startMs = record
+    .status === "running" && record.startedAt
+      ? record.startedAt
+      : record.createdAt
+  const [now, setNow] = React.useState(() => Date.now())
+
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [startMs])
+
+  const elapsedText = formatElapsedTime(now - startMs)
+
+  const phase =
+    record.status === "waiting"
+      ? "排队中"
+      : record.status === "running"
+        ? "生成中"
+        : "处理中"
+
   return (
     <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 p-6 text-center">
       <Spinner className="size-5 text-muted-foreground" />
-      <p className="text-sm font-medium">正在生成图片</p>
+      <div className="flex items-baseline gap-2">
+        <p className="text-sm font-medium">{phase}</p>
+        <span className="text-sm tabular-nums text-muted-foreground">
+          {elapsedText}
+        </span>
+      </div>
       <p className="text-xs text-muted-foreground">
-        正在处理你的请求,请勿刷新页面
+        可以离开此页面，完成后回来查看
       </p>
+    </div>
+  )
+}
+
+function formatElapsedTime(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} 秒`
+}
+
+function ImageLoadFailedState({
+  error,
+  onRetry,
+}: {
+  error: string
+  onRetry: () => void
+}) {
+  return (
+    <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-muted/20 p-6 text-center">
+      <CircleAlert className="size-5 text-destructive" />
+      <p className="text-sm font-medium">图片加载失败</p>
+      <p className="text-xs text-muted-foreground">{error}</p>
+      <Button size="sm" variant="outline" onClick={onRetry}>
+        <RefreshCw className="size-4" />
+        重新加载
+      </Button>
     </div>
   )
 }
@@ -194,7 +271,7 @@ function FailedState({
   onRetry: () => void
   onReuse: () => void
 }) {
-  const errorText = record.error ?? "请求失败"
+  const errorText = toUserFacingErrorMessage(record.error)
   return (
     <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-muted/20 p-6 text-center">
       <CircleAlert className="size-5 text-destructive" />
@@ -213,8 +290,8 @@ function FailedState({
   )
 }
 
-function ratioToAspect(ratio: string): string {
-  const parts = ratio.split(":").map(Number)
+function sizeToAspect(size: string): string {
+  const parts = size.split("x").map(Number)
   if (parts.length !== 2 || !parts[0] || !parts[1]) return "1 / 1"
   return `${parts[0]} / ${parts[1]}`
 }
@@ -235,7 +312,7 @@ function CompletedState({
   onRegenerate: () => void
 }) {
   const [aspect, setAspect] = React.useState<string>(() =>
-    ratioToAspect(record.ratio)
+    sizeToAspect(record.imageParams.size)
   )
 
   const handleLoad = React.useCallback(
@@ -254,84 +331,110 @@ function CompletedState({
       style={{ aspectRatio: aspect }}
     >
       <img
-        src={`data:image/png;base64,${record.base64}`}
+        src={record.base64}
         alt={record.prompt.slice(0, 40)}
         onLoad={handleLoad}
         onClick={onOpenLightbox}
         className="block size-full cursor-zoom-in object-contain"
       />
       <div className="pointer-events-none absolute right-3 top-3 flex translate-y-[-0.25rem] items-center gap-0.5 rounded-md bg-background/95 p-0.5 opacity-0 shadow-sm ring-1 ring-border backdrop-blur transition group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
-        <Popover>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <Button size="icon-xs" variant="ghost" aria-label="查看提示词">
-                  <FileText className="size-3.5" />
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent>查看提示词</TooltipContent>
-          </Tooltip>
-          <PopoverContent
-            side="bottom"
-            align="end"
-            className="max-w-sm space-y-1"
-          >
-            <p className="text-sm whitespace-pre-wrap break-words">
-              {record.prompt}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {new Date(record.createdAt).toLocaleString()}
-            </p>
-          </PopoverContent>
-        </Popover>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon-xs" variant="ghost" onClick={onDownload}>
-              <Download className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>下载</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon-xs" variant="ghost" onClick={onToggleFavorite}>
-              <motion.span
-                key={record.favorite ? "fav" : "unfav"}
-                initial={{ scale: 0.7, opacity: 0 }}
-                animate={{ scale: [0.7, 1.25, 1], opacity: 1 }}
-                transition={{ duration: 0.32, ease: [0.2, 0.8, 0.2, 1] }}
-                className="inline-flex"
-              >
-                <Star
-                  className={cn(
-                    "size-3.5",
-                    record.favorite && "fill-amber-400 text-amber-400"
-                  )}
-                />
-              </motion.span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{record.favorite ? "取消收藏" : "收藏"}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon-xs" variant="ghost" onClick={onCopyPrompt}>
-              <Copy className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>复制提示词</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon-xs" variant="ghost" onClick={onRegenerate}>
-              <RefreshCw className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>重新生成</TooltipContent>
-        </Tooltip>
+        <PreviewActions
+          record={record}
+          onDownload={onDownload}
+          onToggleFavorite={onToggleFavorite}
+          onCopyPrompt={onCopyPrompt}
+          onRegenerate={onRegenerate}
+        />
       </div>
     </div>
+  )
+}
+
+function PreviewActions({
+  record,
+  onDownload,
+  onToggleFavorite,
+  onCopyPrompt,
+  onRegenerate,
+}: {
+  record: HistoryRecord
+  onDownload: () => void
+  onToggleFavorite: () => void
+  onCopyPrompt: () => void
+  onRegenerate: () => void
+}) {
+  return (
+    <>
+      <Popover>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button size="icon-xs" variant="ghost" aria-label="查看提示词">
+                <FileText className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>查看提示词</TooltipContent>
+        </Tooltip>
+        <PopoverContent
+          side="bottom"
+          align="end"
+          className="max-w-sm space-y-1"
+        >
+          <p className="text-sm whitespace-pre-wrap break-words">
+            {record.prompt}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {new Date(record.createdAt).toLocaleString()}
+          </p>
+        </PopoverContent>
+      </Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="icon-xs" variant="ghost" onClick={onDownload}>
+            <Download className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>下载</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="icon-xs" variant="ghost" onClick={onToggleFavorite}>
+            <motion.span
+              key={record.favorite ? "fav" : "unfav"}
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: [0.7, 1.25, 1], opacity: 1 }}
+              transition={{ duration: 0.32, ease: [0.2, 0.8, 0.2, 1] }}
+              className="inline-flex"
+            >
+              <Star
+                className={cn(
+                  "size-3.5",
+                  record.favorite && "fill-amber-400 text-amber-400"
+                )}
+              />
+            </motion.span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{record.favorite ? "取消收藏" : "收藏"}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="icon-xs" variant="ghost" onClick={onCopyPrompt}>
+            <Copy className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>复制提示词</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="icon-xs" variant="ghost" onClick={onRegenerate}>
+            <RefreshCw className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>重新生成</TooltipContent>
+      </Tooltip>
+    </>
   )
 }
 

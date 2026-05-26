@@ -8,7 +8,6 @@ import {
   Palette,
   Settings,
   Shield,
-  Terminal,
 } from "lucide-react"
 import { toast } from "sonner"
 import { motion } from "motion/react"
@@ -32,7 +31,6 @@ import { useMotionVariants } from "@/lib/motion"
 const NAV_ITEMS = [
   { href: "/", label: "工作台", icon: Palette },
   { href: "/gallery", label: "画廊", icon: Images },
-  { href: "/logs", label: "日志", icon: Terminal },
 ] as const
 
 function avatarLetter(user: AuthUser): string {

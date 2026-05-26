@@ -4,33 +4,21 @@ import * as React from "react"
 import { toast } from "sonner"
 import { AnimatePresence, motion } from "motion/react"
 import {
-  Check,
-  ChevronsUpDown,
   CircleUser,
-  KeyRound,
   Search,
   Settings,
   Sparkles,
 } from "lucide-react"
 
-import { useConfig } from "@/app/providers/app-state-provider"
 import { useAuth } from "@/app/providers/auth-provider"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { useMotionVariants } from "@/lib/motion"
-import { cn } from "@/lib/utils"
-import { modelOptions } from "@/lib/api/models"
 
-type SectionId = "account" | "general" | "api"
+type SectionId = "account" | "general"
 
 type SectionMeta = {
   id: SectionId
@@ -41,7 +29,6 @@ type SectionMeta = {
 const SECTIONS: ReadonlyArray<SectionMeta> = [
   { id: "account", label: "账户", icon: CircleUser },
   { id: "general", label: "通用", icon: Settings },
-  { id: "api", label: "API 连接", icon: KeyRound },
 ]
 
 export function SettingsView() {
@@ -94,7 +81,6 @@ export function SettingsContent({ variant }: { variant: "page" | "dialog" }) {
             >
               {active === "account" ? <AccountSection /> : null}
               {active === "general" ? <GeneralSection /> : null}
-              {active === "api" ? <ApiConnectionSection /> : null}
             </motion.div>
           </AnimatePresence>
         </ScrollArea>
@@ -141,102 +127,6 @@ function SettingsSubNav({
           )
         })}
       </nav>
-    </div>
-  )
-}
-
-function ApiConnectionSection() {
-  const { config, updateConfig, enabledModels } = useConfig()
-  const [modelOpen, setModelOpen] = React.useState(false)
-
-  const choices = React.useMemo(() => {
-    // 优先展示 admin 启用的模型；如果列表为空，回退到内置 modelOptions（避免初次配置前完全无选项）
-    if (enabledModels.length > 0) {
-      return enabledModels.map(
-        (value) =>
-          modelOptions.find((o) => o.value === value) ?? { value, label: value }
-      )
-    }
-    return []
-  }, [enabledModels])
-
-  return (
-    <div className="grid gap-6">
-      <h2 className="text-lg font-semibold tracking-tight">生图接口</h2>
-
-      <div className="grid gap-3">
-        <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          模型
-        </h3>
-        <Card className="gap-0 py-0">
-          <div className="divide-y">
-            <SettingRow
-              label="启用模型"
-              description="上游接口与凭据由管理员统一配置"
-            >
-              {choices.length === 0 ? (
-                <div className="w-64 rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                  暂无可用模型，请联系管理员
-                </div>
-              ) : (
-                <DropdownMenu open={modelOpen} onOpenChange={setModelOpen}>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={modelOpen}
-                      className="w-64 justify-between font-normal"
-                    >
-                      {config.model ? (
-                        choices.find((o) => o.value === config.model)?.label ??
-                        config.model
-                      ) : (
-                        <span className="text-muted-foreground">选择模型</span>
-                      )}
-                      <ChevronsUpDown className="opacity-50" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-64" align="end">
-                    {choices.map((option) => (
-                      <DropdownMenuItem
-                        key={option.value}
-                        onSelect={() => updateConfig({ model: option.value })}
-                      >
-                        <span>{option.label}</span>
-                        <Check
-                          className={cn(
-                            "ml-auto",
-                            config.model === option.value
-                              ? "opacity-100"
-                              : "opacity-0"
-                          )}
-                        />
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </SettingRow>
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid gap-3">
-        <h3 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          上游连接
-        </h3>
-        <Card className="gap-0 py-0">
-          <div className="px-4 py-4 text-xs text-muted-foreground">
-            <p>
-              生图请求的 Base URL 与 API Key 由管理员统一配置，普通用户无法查看或修改。
-            </p>
-            <p className="mt-1">
-              如果生成持续失败，请通知管理员在<span className="font-medium"> 后台 → 上游配置 </span>
-              检查连通性。
-            </p>
-          </div>
-        </Card>
-      </div>
     </div>
   )
 }
