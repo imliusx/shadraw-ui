@@ -27,9 +27,12 @@ export function StatsOverview() {
   }, [])
 
   React.useEffect(() => {
-    void load()
+    const timeout = window.setTimeout(() => void load(), 0)
     const t = setInterval(() => void load(), 30_000)
-    return () => clearInterval(t)
+    return () => {
+      window.clearTimeout(timeout)
+      clearInterval(t)
+    }
   }, [load])
 
   if (loading || !stats) {

@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
+import Image from "next/image"
 import {
   Images,
   LogOut,
@@ -12,10 +13,11 @@ import {
 import { toast } from "sonner"
 import { motion } from "motion/react"
 
-import { useSettingsDialog } from "@/app/providers/app-state-provider"
+import { useConfig, useSettingsDialog } from "@/app/providers/app-state-provider"
 import { useAuth, type AuthUser } from "@/app/providers/auth-provider"
 import { ApiStatusIndicator } from "@/components/api-status-indicator"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { BrandLockup } from "@/components/brand-lockup"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -45,8 +47,10 @@ export function AppHeader() {
   const pathname = usePathname()
   const router = useRouter()
   const { openSettings } = useSettingsDialog()
+  const { config } = useConfig()
   const { user, logout } = useAuth()
   const { slideInDown } = useMotionVariants()
+  const siteTitle = config.siteTitle.trim() || "shadraw"
 
   async function handleLogout() {
     await logout()
@@ -59,35 +63,45 @@ export function AppHeader() {
       variants={slideInDown}
       initial="hidden"
       animate="show"
-      className="grid h-14 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b bg-background/95 px-4 backdrop-blur"
+      className="flex h-14 shrink-0 items-center justify-between border-b bg-background/95 px-4 backdrop-blur"
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <Palette className="size-6 text-foreground" />
-        <h1 className="truncate text-2xl font-light leading-none tracking-tight">
-          shadraw
-        </h1>
-      </div>
+      <div className="flex min-w-0 items-center gap-8">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Image
+            src="/shadraw-logo.svg"
+            alt=""
+            width={24}
+            height={24}
+            className="size-6 shrink-0 rounded-md"
+            priority
+          />
+          <BrandLockup
+            title={siteTitle}
+            titleClassName="text-lg"
+          />
+        </div>
 
-      <nav className="hidden items-center gap-1 md:flex">
-        {NAV_ITEMS.map((item) => {
-          const active = pathname === item.href
-          const Icon = item.icon
-          return (
-            <Button
-              key={item.href}
-              asChild
-              variant={active ? "secondary" : "ghost"}
-              size="sm"
-              className="h-8"
-            >
-              <Link href={item.href}>
-                <Icon className="size-4" />
-                {item.label}
-              </Link>
-            </Button>
-          )
-        })}
-      </nav>
+        <nav className="hidden items-center gap-1 md:flex">
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href
+            const Icon = item.icon
+            return (
+              <Button
+                key={item.href}
+                asChild
+                variant={active ? "secondary" : "ghost"}
+                size="sm"
+                className="h-8"
+              >
+                <Link href={item.href}>
+                  <Icon />
+                  {item.label}
+                </Link>
+              </Button>
+            )
+          })}
+        </nav>
+      </div>
 
       <div className="flex items-center justify-end gap-2">
         <ApiStatusIndicator />

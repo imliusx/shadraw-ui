@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG: Config = {
   baseUrl: "",
   apiKey: "",
   model: RESPONSE_IMAGE_MODEL,
+  siteTitle: "shadraw",
 }
 
 export function loadConfig(): Config {
@@ -31,6 +32,10 @@ export function loadConfig(): Config {
         typeof parsed.model === "string" && parsed.model
           ? parsed.model
           : DEFAULT_CONFIG.model,
+      siteTitle:
+        typeof parsed.siteTitle === "string" && parsed.siteTitle.trim()
+          ? parsed.siteTitle
+          : DEFAULT_CONFIG.siteTitle,
     }
   } catch {
     return DEFAULT_CONFIG

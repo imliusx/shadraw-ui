@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { motion } from "motion/react"
+import type { Layout } from "react-resizable-panels"
 import { toast } from "sonner"
 import {
   ArrowUp,
@@ -37,14 +38,14 @@ import {
 } from "@/components/ui/field"
 import { Label } from "@/components/ui/label"
 import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group"
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import {
-  RadioGroup,
-  RadioGroupItem,
-} from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
@@ -82,6 +83,10 @@ import type {
 } from "./types"
 
 const MAX_REFERENCE_IMAGES = 4
+const DEFAULT_SIDEBAR_CONTROL_LAYOUT: Layout = {
+  parameters: 72,
+  input: 28,
+}
 
 type ModelIconComponent = React.ComponentType<{ size?: number | string }>
 
@@ -205,6 +210,9 @@ export function ControlPanel({
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = React.useState(false)
   const [referenceError, setReferenceError] = React.useState<string | null>(null)
+  const [sidebarLayout, setSidebarLayout] = React.useState<Layout>(
+    DEFAULT_SIDEBAR_CONTROL_LAYOUT
+  )
 
   const openPicker = React.useCallback(() => {
     fileInputRef.current?.click()
@@ -469,14 +477,15 @@ export function ControlPanel({
         <ResizablePanelGroup
           id={`control-panel-${variant}-layout`}
           orientation="vertical"
-          defaultLayout={{ parameters: 72, input: 28 }}
-          resizeTargetMinimumSize={{ fine: 10, coarse: 24 }}
+          defaultLayout={sidebarLayout}
+          onLayoutChanged={setSidebarLayout}
+          resizeTargetMinimumSize={{ fine: 10, coarse: 28 }}
           className="h-full min-h-0"
         >
           <ResizablePanel
             id="parameters"
-            defaultSize="72%"
-            minSize="36%"
+            defaultSize={`${sidebarLayout.parameters}%`}
+            minSize="12%"
             className="min-h-0"
           >
             <ParameterSidebar
@@ -489,9 +498,8 @@ export function ControlPanel({
           <ResizableHandle withHandle />
           <ResizablePanel
             id="input"
-            defaultSize="28%"
-            minSize="22%"
-            maxSize="56%"
+            defaultSize={`${sidebarLayout.input}%`}
+            minSize="16%"
             className="min-h-0 bg-background"
           >
             {inputArea}

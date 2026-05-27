@@ -47,7 +47,8 @@ export function RecordsCard() {
   }, [page, statusFilter])
 
   React.useEffect(() => {
-    void load()
+    const timeout = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timeout)
   }, [load])
 
   const handleDelete = async (id: string) => {

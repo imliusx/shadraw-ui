@@ -42,7 +42,8 @@ export function UsersCard() {
   }, [search, page])
 
   React.useEffect(() => {
-    void load()
+    const timeout = window.setTimeout(() => void load(), 0)
+    return () => window.clearTimeout(timeout)
   }, [load])
 
   const setUserDisabled = async (id: string, disabled: boolean) => {

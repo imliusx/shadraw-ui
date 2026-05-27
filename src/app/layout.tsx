@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import "@chinese-fonts/jhlst/dist/京華老宋体v2_002/result.css"
 import "./globals.css"
 import "react-photo-album/masonry.css"
 import { ThemeProvider } from "@/components/theme-provider"

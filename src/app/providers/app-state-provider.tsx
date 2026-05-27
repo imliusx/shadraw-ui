@@ -15,13 +15,17 @@ import {
   appConfigApi,
   projectsApi,
   recordsApi,
-  type RecordDTO,
+  type ListRecordsParams,
 } from "@/lib/api/records-client"
 import { fetchImageBlobURL, ApiError } from "@/lib/api/client"
 import {
   localizeErrorMessage,
   toUserFacingErrorMessage,
 } from "@/lib/api/errors"
+import {
+  dtoToRecord,
+  dtoToRecordPatch,
+} from "@/lib/api/record-mappers"
 import { tokenStorage } from "@/lib/api/auth-storage"
 import { useAuth } from "@/app/providers/auth-provider"
 import type {
@@ -31,7 +35,6 @@ import type {
   ImageParams,
   Project,
 } from "@/components/workbench/types"
-import { DEFAULT_IMAGE_PARAMS } from "@/components/workbench/data"
 
 type LightboxState = {
   open: boolean
@@ -48,10 +51,24 @@ export type EventLogEntry = {
   message: string
 }
 
+type LoadRecordsPageResult = {
+  records: HistoryRecord[]
+  page: number
+  totalPages: number
+  total: number
+  hasMore: boolean
+}
+
 const EVENT_LOG_CAP = 200
 const POLL_INTERVAL_MS = 2000
+const INITIAL_HISTORY_PAGE_SIZE = 30
 
-const DEFAULT_CONFIG: Config = { baseUrl: "", apiKey: "", model: "" }
+const DEFAULT_CONFIG: Config = {
+  baseUrl: "",
+  apiKey: "",
+  model: "",
+  siteTitle: "shadraw",
+}
 
 type AppState = {
   history: HistoryRecord[]
@@ -69,6 +86,7 @@ type AppState = {
 
 type AppAction =
   | { type: "history/load"; payload: HistoryRecord[] }
+  | { type: "history/merge"; payload: HistoryRecord[] }
   | { type: "history/add"; payload: HistoryRecord }
   | {
       type: "history/update"
@@ -115,8 +133,10 @@ function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "history/load":
       return { ...state, history: action.payload }
+    case "history/merge":
+      return { ...state, history: mergeHistory(state.history, action.payload) }
     case "history/add":
-      return { ...state, history: [...state.history, action.payload] }
+      return { ...state, history: mergeHistory(state.history, [action.payload]) }
     case "history/update":
       return {
         ...state,
@@ -198,6 +218,9 @@ function reducer(state: AppState, action: AppAction): AppState {
 type HistoryContextValue = {
   records: HistoryRecord[]
   isHydrated: boolean
+  loadRecordsPage: (
+    params?: Omit<ListRecordsParams, "scope">
+  ) => Promise<LoadRecordsPageResult>
   addRecord: (params: {
     prompt: string
     model: string
@@ -222,6 +245,7 @@ type ConfigContextValue = {
   config: Config
   enabledModels: string[]
   updateConfig: (patch: Partial<Config>) => void
+  refreshAppConfig: () => Promise<void>
   refreshEnabledModels: () => Promise<void>
   testConnection: () => Promise<boolean> // legacy no-op; admin handles real test
 }
@@ -253,24 +277,6 @@ const EventLogContext = createContext<EventLogContextValue | null>(null)
 
 // ---- helpers ----
 
-function dtoToRecord(dto: RecordDTO, base64?: string): HistoryRecord {
-  const imageParams = normalizeImageParams(dto.imageParams)
-  return {
-    id: Number(dto.id),
-    prompt: dto.prompt,
-    model: dto.model,
-    imageParams,
-    status: dto.status,
-    base64,
-    favorite: dto.favorite,
-    error: dto.error ? toUserFacingErrorMessage(dto.error) : undefined,
-    projectId: dto.projectId ? Number(dto.projectId) : undefined,
-    createdAt: dto.createdAt ? Date.parse(dto.createdAt) : Date.now(),
-    startedAt: dto.startedAt ? Date.parse(dto.startedAt) : undefined,
-    completedAt: dto.completedAt ? Date.parse(dto.completedAt) : undefined,
-  }
-}
-
 function dtoToProject(dto: { id: string; name: string; createdAt: string }): Project {
   return {
     id: Number(dto.id),
@@ -279,68 +285,31 @@ function dtoToProject(dto: { id: string; name: string; createdAt: string }): Pro
   }
 }
 
-function dtoToRecordPatch(dto: RecordDTO): Partial<HistoryRecord> {
-  const imageParams = normalizeImageParams(dto.imageParams)
-  return {
-    prompt: dto.prompt,
-    model: dto.model,
-    imageParams,
-    status: dto.status,
-    favorite: dto.favorite,
-    error: dto.error ? toUserFacingErrorMessage(dto.error) : undefined,
-    projectId: dto.projectId ? Number(dto.projectId) : undefined,
-    startedAt: dto.startedAt ? Date.parse(dto.startedAt) : undefined,
-    completedAt: dto.completedAt ? Date.parse(dto.completedAt) : undefined,
+function mergeHistory(
+  existing: HistoryRecord[],
+  incoming: HistoryRecord[]
+): HistoryRecord[] {
+  if (incoming.length === 0) return existing
+  const map = new Map(existing.map((record) => [record.id, record]))
+
+  for (const record of incoming) {
+    const previous = map.get(record.id)
+    map.set(
+      record.id,
+      previous
+        ? {
+            ...record,
+            base64: previous.base64,
+            imageError: previous.imageError,
+            referenceImages: previous.referenceImages,
+          }
+        : record
+    )
   }
-}
 
-function normalizeImageParams(params?: Partial<ImageParams>): ImageParams {
-  const incoming = (params ?? {}) as Partial<ImageParams> & { n?: unknown }
-  const outputCompression =
-    typeof incoming.output_compression === "number" &&
-    Number.isFinite(incoming.output_compression)
-      ? Math.trunc(incoming.output_compression)
-      : undefined
-  const partialImages =
-    typeof incoming.partial_images === "number" &&
-    Number.isFinite(incoming.partial_images)
-      ? Math.trunc(incoming.partial_images)
-      : undefined
-
-  return {
-    size: incoming.size ?? DEFAULT_IMAGE_PARAMS.size,
-    quality: incoming.quality ?? DEFAULT_IMAGE_PARAMS.quality,
-    background: incoming.background ?? DEFAULT_IMAGE_PARAMS.background,
-    moderation: incoming.moderation ?? DEFAULT_IMAGE_PARAMS.moderation,
-    output_format: incoming.output_format ?? DEFAULT_IMAGE_PARAMS.output_format,
-    output_compression: outputCompression,
-    partial_images: partialImages,
-    stream: incoming.stream,
-    input_fidelity: incoming.input_fidelity,
-    mask: incoming.mask,
-    response_format: incoming.response_format,
-    style: incoming.style,
-    user: incoming.user,
-  }
-}
-
-async function runConcurrent(
-  ids: number[],
-  limit: number,
-  fn: (id: number) => Promise<void>
-) {
-  const queue = [...ids]
-  const workers = Array.from(
-    { length: Math.min(limit, queue.length) },
-    async () => {
-      while (queue.length > 0) {
-        const next = queue.shift()
-        if (next === undefined) break
-        await fn(next)
-      }
-    }
+  return [...map.values()].sort(
+    (a, b) => b.createdAt - a.createdAt || b.id - a.id
   )
-  await Promise.all(workers)
 }
 
 // ---- provider ----
@@ -364,9 +333,64 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   // Active polls: record id -> abort flag.
   const pollersRef = useRef<Set<number>>(new Set())
+  const imageLoadersRef = useRef<Set<number>>(new Set())
 
   const { user } = useAuth()
   const userId = user?.id ?? null
+
+  const applyAppConfig = useCallback((cfg: {
+    enabledModels: string[]
+    siteTitle: string
+  }) => {
+    const pickModel = (models: string[], currentModel: string): string => {
+      if (models.length === 0) return ""
+      if (currentModel && models.includes(currentModel)) return currentModel
+      if (models.includes("gpt-image-2")) return "gpt-image-2"
+      return models[0] ?? ""
+    }
+    const currentConfig = stateRef.current.config
+    dispatch({
+      type: "config/load",
+      payload: {
+        config: {
+          ...currentConfig,
+          model: pickModel(cfg.enabledModels, currentConfig.model),
+          siteTitle: cfg.siteTitle,
+        },
+        enabledModels: cfg.enabledModels,
+      },
+    })
+  }, [])
+
+  const refreshAppConfig = useCallback<ConfigContextValue["refreshAppConfig"]>(
+    async () => {
+      const cfg = await appConfigApi.load()
+      applyAppConfig(cfg)
+    },
+    [applyAppConfig]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadPublicConfig() {
+      try {
+        const cfg = await appConfigApi.load()
+        if (cancelled) return
+        applyAppConfig(cfg)
+      } catch {
+        /* keep defaults */
+      }
+    }
+    void loadPublicConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [applyAppConfig])
+
+  useEffect(() => {
+    const title = state.config.siteTitle.trim() || "shadraw"
+    document.title = title
+  }, [state.config.siteTitle])
 
   // Wipe all in-memory user data. Called on user-id change.
   const wipe = useCallback(() => {
@@ -377,7 +401,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "projects/load", payload: [] })
     dispatch({
       type: "config/load",
-      payload: { config: DEFAULT_CONFIG, enabledModels: [] },
+      payload: {
+        config: {
+          ...DEFAULT_CONFIG,
+          siteTitle: stateRef.current.config.siteTitle,
+        },
+        enabledModels: [],
+      },
     })
     dispatch({ type: "ui/setActive", payload: null })
     dispatch({ type: "ui/closeLightbox" })
@@ -385,6 +415,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loadImageFor = useCallback(async (id: number) => {
+    if (imageLoadersRef.current.has(id)) return
+    imageLoadersRef.current.add(id)
     // Mark "in flight": clear any prior error and base64 so UI shows loading.
     dispatch({
       type: "history/update",
@@ -413,6 +445,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         type: "history/update",
         payload: { id, patch: { imageError: message } },
       })
+    } finally {
+      imageLoadersRef.current.delete(id)
     }
   }, [])
 
@@ -452,6 +486,36 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [loadImageFor]
   )
 
+  const loadRecordsPage = useCallback<HistoryContextValue["loadRecordsPage"]>(
+    async (params = {}) => {
+      const pageSize = params.pageSize ?? INITIAL_HISTORY_PAGE_SIZE
+      const response = await recordsApi.list({
+        ...params,
+        page: params.page ?? 1,
+        pageSize,
+      })
+      const list = response.data.records.map((dto) => dtoToRecord(dto))
+      dispatch({ type: "history/merge", payload: list })
+      for (const rec of list) {
+        if (rec.status === "waiting" || rec.status === "running") {
+          void startPolling(rec.id)
+        }
+      }
+      const page = response.meta?.page ?? params.page ?? 1
+      const totalPages =
+        response.meta?.totalPages ??
+        (list.length >= pageSize ? page + 1 : page)
+      return {
+        records: list,
+        page,
+        totalPages,
+        total: response.meta?.total ?? list.length,
+        hasMore: page < totalPages,
+      }
+    },
+    [startPolling]
+  )
+
   useEffect(() => {
     // user changed (login/logout/switch). Drop stale data and re-hydrate.
     wipe()
@@ -463,31 +527,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         return
       }
       try {
-        const [records, projects, cfg] = await Promise.all([
-          recordsApi.list({ pageSize: 100 }),
+        const [recordResponse, projects, cfg] = await Promise.all([
+          recordsApi.list({
+            page: 1,
+            pageSize: INITIAL_HISTORY_PAGE_SIZE,
+          }),
           projectsApi.list(),
           appConfigApi.load(),
         ])
         if (cancelled) return
-        const list = records.data.records.map((d) => dtoToRecord(d))
+        const list = recordResponse.data.records.map((d) => dtoToRecord(d))
         dispatch({ type: "history/load", payload: list })
         dispatch({
           type: "projects/load",
           payload: projects.map(dtoToProject),
         })
-        // Default model selection: prefer gpt-image-2 if enabled, else first.
-        const pickModel = (models: string[]): string => {
-          if (models.length === 0) return ""
-          if (models.includes("gpt-image-2")) return "gpt-image-2"
-          return models[0] ?? ""
-        }
-        dispatch({
-          type: "config/load",
-          payload: {
-            config: { ...DEFAULT_CONFIG, model: pickModel(cfg.enabledModels) },
-            enabledModels: cfg.enabledModels,
-          },
-        })
+        applyAppConfig(cfg)
         // Reflect upstream-config readiness in the global status indicator.
         dispatch({
           type: "ui/setApiStatus",
@@ -499,12 +554,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
                   errorMessage: "管理员尚未配置可用模型",
                 },
         })
-        // Hydrate completed record images (concurrency-limited so we
-        // don't slam the backend or hit the browser's 6/host limit).
-        const completedIds = list
-          .filter((r) => r.status === "completed")
-          .map((r) => r.id)
-        void runConcurrent(completedIds, 4, loadImageFor)
         for (const rec of list) {
           if (rec.status === "waiting" || rec.status === "running") {
             void startPolling(rec.id)
@@ -528,7 +577,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [userId, wipe, loadImageFor, startPolling])
+  }, [userId, wipe, loadImageFor, startPolling, applyAppConfig])
 
   const addRecord = useCallback<HistoryContextValue["addRecord"]>(
     async ({ prompt, model, imageParams, referenceImages }) => {
@@ -569,15 +618,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const updateRecord = useCallback<HistoryContextValue["updateRecord"]>(
     async (id, patch) => {
       // Only fields the backend supports go through the API.
-      const apiPatch: { favorite?: boolean; projectId?: string | null } = {}
+      const apiPatch: {
+        favorite?: boolean
+        isPublic?: boolean
+        promptPublic?: boolean
+        projectId?: string | null
+      } = {}
       if (patch.favorite !== undefined) apiPatch.favorite = patch.favorite
+      if (patch.isPublic !== undefined) apiPatch.isPublic = patch.isPublic
+      if (patch.promptPublic !== undefined)
+        apiPatch.promptPublic = patch.promptPublic
       if ("projectId" in patch) {
         apiPatch.projectId =
           patch.projectId === undefined ? null : String(patch.projectId)
       }
       if (Object.keys(apiPatch).length > 0) {
         try {
-          await recordsApi.update(String(id), apiPatch)
+          const dto = await recordsApi.update(String(id), apiPatch)
+          dispatch({
+            type: "history/update",
+            payload: { id, patch: dtoToRecordPatch(dto) },
+          })
+          return
         } catch {
           // surface via toast at call site; still keep optimistic state
         }
@@ -647,12 +709,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async () => {
       try {
         const cfg = await appConfigApi.load()
-        dispatch({ type: "enabledModels/set", payload: cfg.enabledModels })
+        applyAppConfig(cfg)
       } catch {
         /* ignore */
       }
     },
-    []
+    [applyAppConfig]
   )
 
   const testConnection = useCallback<ConfigContextValue["testConnection"]>(
@@ -728,9 +790,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       updateRecord,
       deleteRecord,
       getById,
+      loadRecordsPage,
       reloadImage: loadImageFor,
     }),
-    [state.history, state.isHydrated, addRecord, retryRecord, updateRecord, deleteRecord, getById, loadImageFor]
+    [state.history, state.isHydrated, addRecord, retryRecord, updateRecord, deleteRecord, getById, loadRecordsPage, loadImageFor]
   )
 
   const projectsValue = useMemo<ProjectsContextValue>(
@@ -748,10 +811,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       config: state.config,
       enabledModels: state.enabledModels,
       updateConfig,
+      refreshAppConfig,
       refreshEnabledModels,
       testConnection,
     }),
-    [state.config, state.enabledModels, updateConfig, refreshEnabledModels, testConnection]
+    [
+      state.config,
+      state.enabledModels,
+      updateConfig,
+      refreshAppConfig,
+      refreshEnabledModels,
+      testConnection,
+    ]
   )
 
   const uiValue = useMemo<UIContextValue>(

@@ -7,6 +7,7 @@ import { motion } from "motion/react"
 import { CircleAlert } from "lucide-react"
 import { toast } from "sonner"
 
+import { useConfig } from "@/app/providers/app-state-provider"
 import { useAuth } from "@/app/providers/auth-provider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -52,8 +53,10 @@ function runValidation(values: { email: string; password: string }): FieldErrors
 
 export function LoginForm() {
   const router = useRouter()
+  const { config } = useConfig()
   const { login, status, error, clearError } = useAuth()
   const { fadeInUp } = useMotionVariants()
+  const siteTitle = config.siteTitle.trim() || "shadraw"
 
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -109,7 +112,13 @@ export function LoginForm() {
       <Card className="py-8">
       <CardHeader className="items-center px-8 text-center">
         <CardTitle className="text-xl font-semibold tracking-tight">账号登录</CardTitle>
-        <CardDescription>登录你的 shadraw 账号</CardDescription>
+        <CardDescription>
+          登录你的{" "}
+          <span className="font-brand-wordmark text-foreground/70">
+            {siteTitle}
+          </span>{" "}
+          账号
+        </CardDescription>
       </CardHeader>
       <CardContent className="px-8">
         <form onSubmit={handleSubmit} noValidate>

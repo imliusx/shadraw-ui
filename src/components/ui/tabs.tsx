@@ -27,7 +27,8 @@ const tabsListVariants = cva(
     variants: {
       variant: {
         default: "bg-muted",
-        line: "gap-1 bg-transparent",
+        line:
+          "gap-1 bg-transparent p-0 **:data-[slot=tabs-trigger]:rounded-none **:data-[slot=tabs-trigger]:border-0 **:data-[slot=tabs-trigger]:border-b-2 **:data-[slot=tabs-trigger]:border-transparent **:data-[slot=tabs-trigger]:bg-transparent **:data-[slot=tabs-trigger]:px-2 **:data-[slot=tabs-trigger]:shadow-none **:data-[slot=tabs-trigger]:data-[state=active]:!border-foreground **:data-[slot=tabs-trigger]:data-[state=active]:!bg-transparent **:data-[slot=tabs-trigger]:data-[state=active]:!shadow-none **:data-[slot=tabs-trigger]:data-active:!border-foreground **:data-[slot=tabs-trigger]:data-active:!bg-transparent **:data-[slot=tabs-trigger]:data-active:!shadow-none dark:**:data-[slot=tabs-trigger]:data-[state=active]:!border-foreground dark:**:data-[slot=tabs-trigger]:data-[state=active]:!bg-transparent dark:**:data-[slot=tabs-trigger]:data-active:!border-foreground dark:**:data-[slot=tabs-trigger]:data-active:!bg-transparent",
       },
     },
     defaultVariants: {

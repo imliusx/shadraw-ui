@@ -10,6 +10,10 @@ export type UpstreamConfigDTO = {
   workerConcurrency: number
 }
 
+export type SiteConfigDTO = {
+  siteTitle: string
+}
+
 export type UpdateUpstreamPayload = {
   baseUrl?: string
   apiKey?: string | null // string = set; null = clear; undefined = unchanged
@@ -63,6 +67,20 @@ export const adminApi = {
       { workerConcurrency }
     )
     return data
+  },
+
+  async getSiteSettings(): Promise<SiteConfigDTO> {
+    const { data } = await apiClient.get<{ config: SiteConfigDTO }>(
+      "/api/v1/admin/site-settings"
+    )
+    return data.config
+  },
+  async updateSiteSettings(p: SiteConfigDTO): Promise<SiteConfigDTO> {
+    const { data } = await apiClient.patch<{ config: SiteConfigDTO }>(
+      "/api/v1/admin/site-settings",
+      p
+    )
+    return data.config
   },
 
   async listUsers(params: {

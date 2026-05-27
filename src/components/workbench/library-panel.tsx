@@ -16,7 +16,6 @@ import {
   ImageIcon,
   Inbox,
   Layers3,
-  PanelLeft,
   Pencil,
   Plus,
   RefreshCw,
@@ -32,6 +31,7 @@ import {
   useHistory,
   useProjects,
 } from "@/app/providers/app-state-provider"
+import { InfiniteLoadSentinel } from "@/components/infinite-load-sentinel"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,7 +60,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -75,12 +81,15 @@ import type {
   Project,
 } from "@/components/workbench/types"
 import { TabFade } from "@/components/motion/tab-fade"
+import { usePagedRecords } from "@/components/use-paged-records"
 import { useMotionVariants } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 
 type LibraryTab = "history" | "projects" | "favorites"
 
 type ProjectFilter = number | null | undefined
+
+const LIBRARY_PAGE_SIZE = 24
 
 type LibraryPanelProps = {
   setPrompt: (value: string) => void
@@ -91,11 +100,12 @@ export function LibraryPanel({
   setPrompt,
   setImageParams,
 }: LibraryPanelProps) {
-  const { records, updateRecord, deleteRecord } = useHistory()
+  const { updateRecord, deleteRecord, reloadImage } = useHistory()
   const { projects, addProject, renameProject, deleteProject } = useProjects()
   const [activeHistoryId, setActiveHistoryId] = useActiveHistory()
   const { retry } = useGenerate()
   const { listContainer, listItem, slideInLeft } = useMotionVariants()
+  const viewportRef = React.useRef<HTMLDivElement>(null)
 
   const [tab, setTab] = React.useState<LibraryTab>("history")
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -111,32 +121,31 @@ export function LibraryPanel({
   const [cancelRecordTarget, setCancelRecordTarget] =
     React.useState<HistoryRecord | null>(null)
 
-  const filteredHistory = React.useMemo(() => {
-    const query = deferredQuery.trim().toLowerCase()
-    let list = [...records].sort((a, b) => b.id - a.id)
-    if (projectFilter === null) {
-      list = list.filter((record) => record.projectId === undefined)
-    } else if (typeof projectFilter === "number") {
-      list = list.filter((record) => record.projectId === projectFilter)
-    }
-    if (query) {
-      list = list.filter((record) =>
-        record.prompt.toLowerCase().includes(query)
-      )
-    }
-    return list
-  }, [records, deferredQuery, projectFilter])
+  const historyPage = usePagedRecords({
+    enabled: tab === "history",
+    params: {
+      projectId:
+        projectFilter === null
+          ? "none"
+          : typeof projectFilter === "number"
+            ? String(projectFilter)
+            : undefined,
+      q: deferredQuery,
+    },
+    pageSize: LIBRARY_PAGE_SIZE,
+  })
 
-  const filteredFavorites = React.useMemo(() => {
-    const query = deferredQuery.trim().toLowerCase()
-    let list = records.filter((record) => record.favorite).sort((a, b) => b.id - a.id)
-    if (query) {
-      list = list.filter((record) =>
-        record.prompt.toLowerCase().includes(query)
-      )
-    }
-    return list
-  }, [records, deferredQuery])
+  const favoritesPage = usePagedRecords({
+    enabled: tab === "favorites",
+    params: {
+      favorite: true,
+      q: deferredQuery,
+    },
+    pageSize: LIBRARY_PAGE_SIZE,
+  })
+
+  const filteredHistory = historyPage.records
+  const filteredFavorites = favoritesPage.records
 
   const sortedProjects = React.useMemo(
     () => [...projects].sort((a, b) => b.createdAt - a.createdAt),
@@ -265,14 +274,11 @@ export function LibraryPanel({
       animate="show"
       className="flex h-full min-w-0 flex-col"
     >
-      <div className="flex h-12 shrink-0 items-center justify-between px-4">
+      <div className="flex h-12 shrink-0 items-center px-4">
         <div className="flex items-center gap-2">
           <FolderOpen className="size-4 text-muted-foreground" />
           <p className="text-sm font-medium">素材库</p>
         </div>
-        <Button size="icon-sm" variant="ghost">
-          <PanelLeft className="size-4" />
-        </Button>
       </div>
 
       <Tabs
@@ -306,7 +312,10 @@ export function LibraryPanel({
           </TabsList>
         </div>
 
-        <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <ScrollArea
+          className="min-h-0 min-w-0 flex-1 overflow-hidden"
+          viewportRef={viewportRef}
+        >
           <TabsContent
             value="history"
             className="m-0 min-w-0 overflow-hidden px-4 pb-4 pt-2"
@@ -328,7 +337,9 @@ export function LibraryPanel({
                 </div>
               ) : null}
 
-              {filteredHistory.length === 0 ? (
+              {historyPage.isLoadingInitial ? (
+                <HistoryCardSkeletonList />
+              ) : filteredHistory.length === 0 ? (
                 <EmptyState
                   deferredQuery={deferredQuery}
                   onClearSearch={() => setSearchQuery("")}
@@ -357,12 +368,19 @@ export function LibraryPanel({
                         onToggleFavorite={handleToggleFavorite}
                         onMoveToProject={handleMoveToProject}
                         onRetry={handleRetry}
+                        onRequestImage={reloadImage}
                         onRequestCreateProject={() => setCreateProjectOpen(true)}
                       />
                     ))}
                   </AnimatePresence>
                 </motion.div>
               )}
+              {historyPage.isLoadingMore ? <HistoryCardSkeletonList count={3} /> : null}
+              <InfiniteLoadSentinel
+                disabled={!historyPage.hasMore || historyPage.isLoadingMore}
+                onLoadMore={historyPage.loadMore}
+                rootRef={viewportRef}
+              />
             </TabFade>
           </TabsContent>
 
@@ -408,7 +426,9 @@ export function LibraryPanel({
             className="m-0 px-4 pb-4 pt-2"
           >
             <TabFade tabKey="favorites" className="space-y-2">
-              {filteredFavorites.length === 0 ? (
+              {favoritesPage.isLoadingInitial ? (
+                <HistoryCardSkeletonList />
+              ) : filteredFavorites.length === 0 ? (
                 <EmptyState
                   deferredQuery={deferredQuery}
                   onClearSearch={() => setSearchQuery("")}
@@ -437,12 +457,19 @@ export function LibraryPanel({
                         onToggleFavorite={handleToggleFavorite}
                         onMoveToProject={handleMoveToProject}
                         onRetry={handleRetry}
+                        onRequestImage={reloadImage}
                         onRequestCreateProject={() => setCreateProjectOpen(true)}
                       />
                     ))}
                   </AnimatePresence>
                 </motion.div>
               )}
+              {favoritesPage.isLoadingMore ? <HistoryCardSkeletonList count={3} /> : null}
+              <InfiniteLoadSentinel
+                disabled={!favoritesPage.hasMore || favoritesPage.isLoadingMore}
+                onLoadMore={favoritesPage.loadMore}
+                rootRef={viewportRef}
+              />
             </TabFade>
           </TabsContent>
         </ScrollArea>
@@ -590,6 +617,7 @@ type HistoryCardProps = {
   onToggleFavorite: (record: HistoryRecord) => void
   onMoveToProject: (record: HistoryRecord, projectId: number | undefined) => void
   onRetry: (record: HistoryRecord) => void
+  onRequestImage: (id: number) => Promise<void>
   onRequestCreateProject: () => void
 }
 
@@ -605,9 +633,13 @@ function HistoryCard({
   onToggleFavorite,
   onMoveToProject,
   onRetry,
+  onRequestImage,
   onRequestCreateProject,
 }: HistoryCardProps) {
   const { listItem } = useMotionVariants()
+  const isImageLoading =
+    record.status === "completed" && !record.base64 && !record.imageError
+
   return (
     <motion.div
       layout
@@ -621,62 +653,154 @@ function HistoryCard({
           "border-primary/20 bg-primary/5 text-foreground shadow-sm hover:bg-primary/5 dark:border-border dark:bg-accent dark:text-accent-foreground dark:shadow-none dark:hover:bg-accent"
       )}
     >
+      {isImageLoading ? (
+        <HistoryCardSkeleton
+          record={record}
+          onSelect={onSelect}
+          onRequestImage={onRequestImage}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            className="row-span-2 self-start rounded-lg focus-visible:outline-none"
+            onClick={() => onSelect(record)}
+            aria-label="选择历史记录"
+          >
+            <HistoryThumbnail record={record} onRequestImage={onRequestImage} />
+          </button>
+          <button
+            type="button"
+            className="min-w-0 text-left focus-visible:outline-none"
+            onClick={() => onSelect(record)}
+          >
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <div className="flex items-center gap-2 pr-20 text-xs text-muted-foreground">
+                <span className="truncate">
+                  {record.model} · {record.imageParams.quality} ·{" "}
+                  {record.imageParams.size}
+                </span>
+              </div>
+              <p className="truncate text-sm font-medium leading-5">
+                {record.prompt || "(无提示词)"}
+              </p>
+            </div>
+          </button>
+          <div className="pointer-events-none absolute right-2 top-2">
+            <StatusBadge status={record.status} />
+          </div>
+          <div className="col-start-2 flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+            <HistoryCardActions
+              record={record}
+              projects={projects}
+              onReuse={onReuse}
+              onCopyPrompt={onCopyPrompt}
+              onRetry={onRetry}
+              onToggleFavorite={onToggleFavorite}
+              onMoveToProject={onMoveToProject}
+              onRequestCreateProject={onRequestCreateProject}
+              onCancelWaiting={onCancelWaiting}
+              onRequestDelete={onRequestDelete}
+            />
+            <span className="shrink-0 truncate">
+              {record.status === "waiting" || record.status === "running" ? (
+                <LiveElapsed
+                  startMs={
+                    record.status === "running" && record.startedAt
+                      ? record.startedAt
+                      : record.createdAt
+                  }
+                />
+              ) : (
+                formatRelativeTime(record.createdAt)
+              )}
+            </span>
+          </div>
+        </>
+      )}
+    </motion.div>
+  )
+}
+
+function HistoryCardSkeleton({
+  record,
+  onSelect,
+  onRequestImage,
+}: {
+  record: HistoryRecord
+  onSelect: (record: HistoryRecord) => void
+  onRequestImage: (id: number) => Promise<void>
+}) {
+  return (
+    <>
       <button
         type="button"
         className="row-span-2 self-start rounded-lg focus-visible:outline-none"
         onClick={() => onSelect(record)}
         aria-label="选择历史记录"
       >
-        <HistoryThumbnail record={record} />
+        <HistoryThumbnail record={record} onRequestImage={onRequestImage} />
       </button>
       <button
         type="button"
         className="min-w-0 text-left focus-visible:outline-none"
         onClick={() => onSelect(record)}
       >
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <div className="flex items-center gap-2 pr-20 text-xs text-muted-foreground">
-            <span className="truncate">
-              {record.model} · {record.imageParams.quality} ·{" "}
-              {record.imageParams.size}
-            </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex items-center gap-1.5 pr-20">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-10" />
+            <Skeleton className="h-3 w-14" />
           </div>
-          <p className="truncate text-sm font-medium leading-5">
-            {record.prompt || "(无提示词)"}
-          </p>
+          <Skeleton className="h-4 w-11/12" />
         </div>
       </button>
-      <div className="pointer-events-none absolute right-2 top-2">
-        <StatusBadge status={record.status} />
+      <div className="absolute right-2 top-2">
+        <Skeleton className="h-5 w-12 rounded-4xl" />
       </div>
-      <div className="col-start-2 flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
-        <HistoryCardActions
-          record={record}
-          projects={projects}
-          onReuse={onReuse}
-          onCopyPrompt={onCopyPrompt}
-          onRetry={onRetry}
-          onToggleFavorite={onToggleFavorite}
-          onMoveToProject={onMoveToProject}
-          onRequestCreateProject={onRequestCreateProject}
-          onCancelWaiting={onCancelWaiting}
-          onRequestDelete={onRequestDelete}
-        />
-        <span className="shrink-0 truncate">
-          {record.status === "waiting" || record.status === "running" ? (
-            <LiveElapsed
-              startMs={
-                record.status === "running" && record.startedAt
-                  ? record.startedAt
-                  : record.createdAt
-              }
-            />
-          ) : (
-            formatRelativeTime(record.createdAt)
-          )}
-        </span>
+      <div className="col-start-2 flex min-w-0 items-center justify-between gap-2">
+        <div className="-ml-1.5 flex min-w-0 items-center gap-1">
+          <Skeleton className="size-7 rounded-lg" />
+          <Skeleton className="size-7 rounded-lg" />
+          <Skeleton className="size-7 rounded-lg" />
+        </div>
+        <Skeleton className="h-3 w-12 shrink-0" />
       </div>
-    </motion.div>
+    </>
+  )
+}
+
+function HistoryCardSkeletonList({ count = 5 }: { count?: number }) {
+  return (
+    <div className="space-y-2">
+      {Array.from({ length: count }, (_, index) => (
+        <div
+          key={index}
+          className="relative grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border p-2.5"
+        >
+          <Skeleton className="row-span-2 size-12 shrink-0 rounded-lg" />
+          <div className="min-w-0 space-y-2">
+            <div className="flex items-center gap-1.5 pr-20">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-3 w-10" />
+              <Skeleton className="h-3 w-14" />
+            </div>
+            <Skeleton className="h-4 w-11/12" />
+          </div>
+          <div className="absolute right-2 top-2">
+            <Skeleton className="h-5 w-12 rounded-4xl" />
+          </div>
+          <div className="col-start-2 flex min-w-0 items-center justify-between gap-2">
+            <div className="-ml-1.5 flex min-w-0 items-center gap-1">
+              <Skeleton className="size-7 rounded-lg" />
+              <Skeleton className="size-7 rounded-lg" />
+              <Skeleton className="size-7 rounded-lg" />
+            </div>
+            <Skeleton className="h-3 w-12 shrink-0" />
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -721,13 +845,39 @@ function HistoryCardActions({
         <Copy className="size-3.5" />
       </TooltipIcon>
       {record.status === "failed" ? (
-        <TooltipIcon
-          label="重试"
-          onClick={() => onRetry(record)}
-          size="icon-sm"
-        >
-          <RefreshCw className="size-3.5" />
-        </TooltipIcon>
+        <>
+          {record.upstreamError ? (
+            <Popover>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <Button size="icon-sm" variant="ghost" aria-label="查看上游返回详情">
+                      <CircleX className="size-3.5" />
+                    </Button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent>查看上游返回详情</TooltipContent>
+              </Tooltip>
+              <PopoverContent side="right" align="start" className="w-80 p-0">
+                <div className="border-b px-3 py-2 text-xs font-medium">
+                  上游返回详情
+                </div>
+                <ScrollArea className="max-h-40">
+                  <pre className="whitespace-pre-wrap break-words p-3 text-xs text-muted-foreground">
+                    {record.upstreamError}
+                  </pre>
+                </ScrollArea>
+              </PopoverContent>
+            </Popover>
+          ) : null}
+          <TooltipIcon
+            label="重试"
+            onClick={() => onRetry(record)}
+            size="icon-sm"
+          >
+            <RefreshCw className="size-3.5" />
+          </TooltipIcon>
+        </>
       ) : null}
       {record.status === "completed" ? (
         <>
@@ -806,10 +956,56 @@ function HistoryCardActions({
   )
 }
 
-function HistoryThumbnail({ record }: { record: HistoryRecord }) {
+function HistoryThumbnail({
+  record,
+  onRequestImage,
+}: {
+  record: HistoryRecord
+  onRequestImage: (id: number) => Promise<void>
+}) {
+  const thumbnailRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    if (record.status !== "completed" || record.base64 || record.imageError) {
+      return
+    }
+
+    const node = thumbnailRef.current
+    if (!node) return
+
+    let requested = false
+    const requestImage = () => {
+      if (requested) return
+      requested = true
+      void onRequestImage(record.id)
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      requestImage()
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          requestImage()
+          observer.disconnect()
+        }
+      },
+      { rootMargin: "240px 0px" }
+    )
+
+    observer.observe(node)
+
+    return () => observer.disconnect()
+  }, [onRequestImage, record])
+
   if (record.status === "completed" && record.base64) {
     return (
-      <div className="relative size-12 shrink-0 overflow-hidden rounded-lg bg-muted">
+      <div
+        ref={thumbnailRef}
+        className="relative size-12 shrink-0 overflow-hidden rounded-lg bg-muted"
+      >
         <img
           src={record.base64}
           alt=""
@@ -818,11 +1014,25 @@ function HistoryThumbnail({ record }: { record: HistoryRecord }) {
       </div>
     )
   }
+
+  if (record.status === "completed" && !record.imageError) {
+    return (
+      <Skeleton
+        ref={thumbnailRef}
+        className="size-12 shrink-0 rounded-lg"
+      />
+    )
+  }
+
   return (
-    <div className="relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground">
+    <div
+      ref={thumbnailRef}
+      className="relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground"
+    >
       {record.status === "waiting" ? <Clock3 className="size-4" /> : null}
       {record.status === "running" ? <Spinner className="size-4 text-amber-500" /> : null}
       {record.status === "failed" ? <CircleX className="size-4 text-destructive" /> : null}
+      {record.status === "completed" ? <ImageIcon className="size-4" /> : null}
     </div>
   )
 }

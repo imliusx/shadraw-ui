@@ -12,11 +12,12 @@ import {
   Search,
 } from "lucide-react"
 
-import { useHistory } from "@/app/providers/app-state-provider"
+import { InfiniteLoadSentinel } from "@/components/infinite-load-sentinel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -30,6 +31,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { usePagedRecords } from "@/components/use-paged-records"
 import { toUserFacingErrorMessage } from "@/lib/api/errors"
 import { useMotionVariants } from "@/lib/motion"
 import type {
@@ -43,30 +45,22 @@ const GRID_TEMPLATE =
   "grid-cols-[10rem_8rem_minmax(20rem,1fr)_6rem_6rem_minmax(12rem,1fr)]"
 
 export function LogsView() {
-  const { records } = useHistory()
   const router = useRouter()
   const { listContainer } = useMotionVariants()
+  const viewportRef = React.useRef<HTMLDivElement>(null)
 
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all")
   const [searchQuery, setSearchQuery] = React.useState("")
   const deferredQuery = React.useDeferredValue(searchQuery)
-
-  const totalCount = records.length
-
-  const filtered = React.useMemo(() => {
-    const sorted = [...records].sort((a, b) => b.createdAt - a.createdAt)
-    const byStatus =
-      statusFilter === "all"
-        ? sorted
-        : sorted.filter((record) => record.status === statusFilter)
-    const queryText = deferredQuery.trim().toLowerCase()
-    if (!queryText) return byStatus
-    return byStatus.filter((record) =>
-      record.prompt.toLowerCase().includes(queryText)
-    )
-  }, [records, statusFilter, deferredQuery])
-
-  const filteredCount = filtered.length
+  const page = usePagedRecords({
+    params: {
+      status: statusFilter === "all" ? undefined : statusFilter,
+      q: deferredQuery,
+    },
+    pageSize: 40,
+  })
+  const filtered = page.records
+  const filteredCount = page.total
 
   const handleRowClick = React.useCallback(
     (record: HistoryRecord) => {
@@ -85,7 +79,7 @@ export function LogsView() {
               <span className="text-sm font-medium">调用日志</span>
             </div>
             <span className="text-xs text-muted-foreground tabular-nums">
-              {filteredCount} / {totalCount} 条
+              {filtered.length} / {filteredCount} 条
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -116,42 +110,50 @@ export function LogsView() {
           </div>
         </div>
 
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="min-h-0 flex-1" viewportRef={viewportRef}>
           <div className="mx-auto w-full max-w-7xl">
-          {filtered.length > 0 ? (
-            <motion.div
-              variants={listContainer}
-              initial="hidden"
-              animate="show"
-              className="flex flex-col"
-            >
-              <div
-                className={`sticky top-0 z-10 grid ${GRID_TEMPLATE} gap-3 bg-background px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground`}
+            {page.isLoadingInitial ? (
+              <LogSkeletonRows />
+            ) : filtered.length > 0 ? (
+              <motion.div
+                variants={listContainer}
+                initial="hidden"
+                animate="show"
+                className="flex flex-col"
               >
-                <div>时间</div>
-                <div>模型</div>
-                <div>提示词</div>
-                <div>状态</div>
-                <div>用时</div>
-                <div>错误</div>
-              </div>
-              {filtered.map((record) => (
-                <LogRow
-                  key={record.id}
-                  record={record}
-                  onClick={() => handleRowClick(record)}
+                <div
+                  className={`sticky top-0 z-10 grid ${GRID_TEMPLATE} gap-3 bg-background px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground`}
+                >
+                  <div>时间</div>
+                  <div>模型</div>
+                  <div>提示词</div>
+                  <div>状态</div>
+                  <div>用时</div>
+                  <div>错误</div>
+                </div>
+                {filtered.map((record) => (
+                  <LogRow
+                    key={record.id}
+                    record={record}
+                    onClick={() => handleRowClick(record)}
+                  />
+                ))}
+                {page.isLoadingMore ? <LogSkeletonRows compact /> : null}
+                <InfiniteLoadSentinel
+                  disabled={!page.hasMore || page.isLoadingMore}
+                  onLoadMore={page.loadMore}
+                  rootRef={viewportRef}
                 />
-              ))}
-            </motion.div>
-          ) : (
-            <EmptyArea
-              totalCount={totalCount}
-              statusFilter={statusFilter}
-              deferredQuery={deferredQuery}
-              onClearSearch={() => setSearchQuery("")}
-              onResetStatus={() => setStatusFilter("all")}
-            />
-          )}
+              </motion.div>
+            ) : (
+              <EmptyArea
+                totalCount={filteredCount}
+                statusFilter={statusFilter}
+                deferredQuery={deferredQuery}
+                onClearSearch={() => setSearchQuery("")}
+                onResetStatus={() => setStatusFilter("all")}
+              />
+            )}
           </div>
         </ScrollArea>
       </div>
@@ -225,8 +227,15 @@ function LogRow({
                 {toUserFacingErrorMessage(record.error)}
               </span>
             </TooltipTrigger>
-            <TooltipContent className="max-w-[40ch] whitespace-pre-wrap">
-              {toUserFacingErrorMessage(record.error)}
+            <TooltipContent className="max-w-[56ch] whitespace-pre-wrap">
+              <div className="flex flex-col gap-2">
+                <span>{toUserFacingErrorMessage(record.error)}</span>
+                {record.upstreamError ? (
+                  <span className="border-t pt-2 text-muted-foreground">
+                    上游返回：{record.upstreamError}
+                  </span>
+                ) : null}
+              </div>
             </TooltipContent>
           </Tooltip>
         ) : (
@@ -234,6 +243,33 @@ function LogRow({
         )}
       </div>
     </motion.div>
+  )
+}
+
+function LogSkeletonRows({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex flex-col">
+      <div
+        className={`grid ${GRID_TEMPLATE} gap-3 bg-background px-4 py-2`}
+      >
+        {Array.from({ length: 6 }, (_, index) => (
+          <Skeleton key={index} className="h-3 w-16" />
+        ))}
+      </div>
+      {Array.from({ length: compact ? 4 : 10 }, (_, index) => (
+        <div
+          key={index}
+          className={`grid ${GRID_TEMPLATE} items-center gap-3 px-4 py-3`}
+        >
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-5 w-14 rounded-4xl" />
+          <Skeleton className="h-3 w-10" />
+          <Skeleton className="h-3 w-full" />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -284,18 +320,6 @@ function EmptyArea({
   onClearSearch: () => void
   onResetStatus: () => void
 }) {
-  if (totalCount === 0) {
-    return (
-      <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-2 p-8 text-center">
-        <History className="size-8 text-muted-foreground" />
-        <p className="text-sm font-medium">还没有任何调用记录</p>
-        <p className="text-xs text-muted-foreground">
-          在工作台触发一次生图后这里会出现日志
-        </p>
-      </div>
-    )
-  }
-
   const query = deferredQuery.trim()
   if (query) {
     return (
@@ -310,14 +334,32 @@ function EmptyArea({
     )
   }
 
-  return (
-    <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 p-8 text-center">
-      <p className="text-sm text-muted-foreground">当前状态过滤无结果</p>
-      {statusFilter !== "all" ? (
+  if (statusFilter !== "all") {
+    return (
+      <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 p-8 text-center">
+        <p className="text-sm text-muted-foreground">当前状态过滤无结果</p>
         <Button variant="outline" size="sm" onClick={onResetStatus}>
           查看全部
         </Button>
-      ) : null}
+      </div>
+    )
+  }
+
+  if (totalCount === 0) {
+    return (
+      <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-2 p-8 text-center">
+        <History className="size-8 text-muted-foreground" />
+        <p className="text-sm font-medium">还没有任何调用记录</p>
+        <p className="text-xs text-muted-foreground">
+          在工作台触发一次生图后这里会出现日志
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-3 p-8 text-center">
+      <p className="text-sm text-muted-foreground">当前状态过滤无结果</p>
     </div>
   )
 }

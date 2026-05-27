@@ -8,6 +8,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@chinese-fonts/jhlst": "^3.0.0",
     "@lobehub/icons": "^5.8.0",
     "@tailwindcss/postcss": "^4.3.0",
     "class-variance-authority": "^0.7.1",

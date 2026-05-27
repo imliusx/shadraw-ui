@@ -31,12 +31,16 @@ export type RecordDTO = {
   imageParams: ImageParams
   status: RecordStatus
   favorite: boolean
+  isPublic: boolean
+  promptPublic?: boolean
   hasImage: boolean
   error?: string
+  upstreamError?: string
   projectId?: string
   referenceCount: number
   startedAt?: string
   completedAt?: string
+  publishedAt?: string
   createdAt: string
 }
 
@@ -52,6 +56,8 @@ export type ListRecordsParams = {
   status?: RecordStatus
   projectId?: string
   favorite?: boolean
+  scope?: "mine" | "public"
+  q?: string
   page?: number
   pageSize?: number
 }
@@ -61,6 +67,8 @@ function listQuery(p: ListRecordsParams): string {
   if (p.status) sp.set("status", p.status)
   if (p.projectId) sp.set("projectId", p.projectId)
   if (p.favorite !== undefined) sp.set("favorite", String(p.favorite))
+  if (p.scope === "public") sp.set("scope", "public")
+  if (p.q?.trim()) sp.set("q", p.q.trim())
   if (p.page) sp.set("page", String(p.page))
   if (p.pageSize) sp.set("pageSize", String(p.pageSize))
   const s = sp.toString()
@@ -86,10 +94,17 @@ export const recordsApi = {
 
   async update(
     id: string,
-    patch: { favorite?: boolean; projectId?: string | null }
+    patch: {
+      favorite?: boolean
+      isPublic?: boolean
+      promptPublic?: boolean
+      projectId?: string | null
+    }
   ): Promise<RecordDTO> {
     const body: Record<string, unknown> = {}
     if (patch.favorite !== undefined) body.favorite = patch.favorite
+    if (patch.isPublic !== undefined) body.isPublic = patch.isPublic
+    if (patch.promptPublic !== undefined) body.promptPublic = patch.promptPublic
     if (patch.projectId !== undefined)
       body.projectId = patch.projectId === null ? "" : patch.projectId
     const { data } = await apiClient.patch<{ record: RecordDTO }>(
@@ -136,11 +151,18 @@ export const projectsApi = {
 
 export type AppConfig = {
   enabledModels: string[]
+  siteTitle: string
 }
 
 export const appConfigApi = {
   async load(): Promise<AppConfig> {
-    const { data } = await apiClient.get<AppConfig>("/api/v1/config")
-    return { enabledModels: data.enabledModels ?? [] }
+    const { data } = await apiClient.get<AppConfig>("/api/v1/config", {
+      auth: false,
+      retry401: false,
+    })
+    return {
+      enabledModels: data.enabledModels ?? [],
+      siteTitle: data.siteTitle?.trim() || "shadraw",
+    }
   },
 }

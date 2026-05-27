@@ -8,7 +8,9 @@ import {
   Copy,
   Download,
   FileText,
+  Globe2,
   ImageIcon,
+  Lock,
   RefreshCw,
   Star,
   WandSparkles,
@@ -23,17 +25,23 @@ import {
 import { toUserFacingErrorMessage } from "@/lib/api/errors"
 import { Button } from "@/components/ui/button"
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Progress } from "@/components/ui/progress"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  PublishConfirmDialog,
+  type PublishOptions,
+} from "@/components/gallery/publish-confirm-dialog"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { RecordDetailsPopover } from "@/components/workbench/record-details-popover"
 import { useMotionVariants } from "@/lib/motion"
 import type { HistoryRecord, ImageParams } from "@/components/workbench/types"
 import { cn } from "@/lib/utils"
@@ -51,6 +59,8 @@ export function PreviewStage({
   const { getById, updateRecord, reloadImage } = useHistory()
   const { openWith } = useLightbox()
   const { submit, retry } = useGenerate()
+  const [publishTarget, setPublishTarget] =
+    React.useState<HistoryRecord | null>(null)
 
   const record = activeId !== null ? getById(activeId) : undefined
 
@@ -107,6 +117,28 @@ export function PreviewStage({
     toast.success(record.favorite ? "已取消收藏" : "已加入收藏")
   }, [record, updateRecord])
 
+  const handleTogglePublic = React.useCallback(async () => {
+    if (!record) return
+    if (!record.isPublic) {
+      setPublishTarget(record)
+      return
+    }
+    await updateRecord(record.id, { isPublic: false, promptPublic: true })
+    toast.success("已取消公开")
+  }, [record, updateRecord])
+
+  const confirmPublish = React.useCallback(
+    async (target: HistoryRecord, options: PublishOptions) => {
+      await updateRecord(target.id, {
+        isPublic: true,
+        promptPublic: options.promptPublic,
+      })
+      setPublishTarget(null)
+      toast.success("已公开到社区画廊")
+    },
+    [updateRecord]
+  )
+
   const handleCopyPrompt = React.useCallback(async () => {
     if (!record) return
     try {
@@ -140,62 +172,72 @@ export function PreviewStage({
             : `loading-${record.id}`
 
   return (
-    <section className="flex h-full min-w-0 flex-col bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--foreground)_14%,transparent)_1px,transparent_0)] bg-[size:22px_22px]">
-      <div className="@container/preview flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 md:p-8">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={stageKey}
-            initial={{ opacity: 0, scale: 0.98, y: 4 }}
-            animate={{
-              opacity: 1,
-              scale: 1,
-              y: 0,
-              transition: { duration: 0.28, ease: [0.2, 0.8, 0.2, 1] },
-            }}
-            exit={{
-              opacity: 0,
-              scale: 0.98,
-              transition: { duration: 0.18, ease: [0.4, 0, 1, 1] },
-            }}
-            className="flex h-full w-full min-h-0 min-w-0 items-center justify-center"
-          >
-            {!record ? (
-              <EmptyStageState />
-            ) : record.status === "waiting" ||
-              record.status === "running" ||
-              (record.status === "completed" &&
+    <>
+      <section className="flex h-full min-w-0 flex-col bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--foreground)_14%,transparent)_1px,transparent_0)] bg-[size:22px_22px]">
+        <div className="@container/preview flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 md:p-8">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={stageKey}
+              initial={{ opacity: 0, scale: 0.98, y: 4 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                y: 0,
+                transition: { duration: 0.28, ease: [0.2, 0.8, 0.2, 1] },
+              }}
+              exit={{
+                opacity: 0,
+                scale: 0.98,
+                transition: { duration: 0.18, ease: [0.4, 0, 1, 1] },
+              }}
+              className="flex h-full w-full min-h-0 min-w-0 items-center justify-center"
+            >
+              {!record ? (
+                <EmptyStageState />
+              ) : record.status === "waiting" ||
+                record.status === "running" ||
+                (record.status === "completed" &&
+                  !record.base64 &&
+                  !record.imageError) ? (
+                <GeneratingState record={record} />
+              ) : record.status === "completed" &&
                 !record.base64 &&
-                !record.imageError) ? (
-              <GeneratingState record={record} />
-            ) : record.status === "completed" &&
-              !record.base64 &&
-              record.imageError ? (
-              <ImageLoadFailedState
-                error={record.imageError}
-                onRetry={handleReloadImage}
-              />
-            ) : record.status === "failed" ? (
-              <FailedState
-                record={record}
-                onRetry={handleRetry}
-                onReuse={handleReuse}
-              />
-            ) : record.base64 ? (
-              <CompletedState
-                record={record}
-                onOpenLightbox={handleOpenLightbox}
-                onDownload={handleDownload}
-                onToggleFavorite={handleToggleFavorite}
-                onCopyPrompt={handleCopyPrompt}
-                onRegenerate={handleRegenerate}
-              />
-            ) : (
-              <EmptyStageState />
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-    </section>
+                record.imageError ? (
+                <ImageLoadFailedState
+                  error={record.imageError}
+                  onRetry={handleReloadImage}
+                />
+              ) : record.status === "failed" ? (
+                <FailedState
+                  record={record}
+                  onRetry={handleRetry}
+                  onReuse={handleReuse}
+                />
+              ) : record.base64 ? (
+                <CompletedState
+                  record={record}
+                  onOpenLightbox={handleOpenLightbox}
+                  onDownload={handleDownload}
+                  onToggleFavorite={handleToggleFavorite}
+                  onTogglePublic={handleTogglePublic}
+                  onCopyPrompt={handleCopyPrompt}
+                  onRegenerate={handleRegenerate}
+                />
+              ) : (
+                <EmptyStageState />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </section>
+      <PublishConfirmDialog
+        record={publishTarget}
+        onOpenChange={(open) => {
+          if (!open) setPublishTarget(null)
+        }}
+        onConfirm={confirmPublish}
+      />
+    </>
   )
 }
 
@@ -207,7 +249,6 @@ function GeneratingState({ record }: { record: HistoryRecord }) {
   const [now, setNow] = React.useState(() => Date.now())
 
   React.useEffect(() => {
-    setNow(Date.now())
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [startMs])
@@ -303,6 +344,27 @@ function FailedState({
     <div className="flex min-h-64 w-full max-w-sm flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-muted/20 p-6 text-center">
       <CircleAlert className="size-5 text-destructive" />
       <p className="text-sm font-medium">{errorText}</p>
+      {record.upstreamError ? (
+        <Collapsible className="w-full rounded-md border bg-background/60 text-left">
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start text-xs text-muted-foreground"
+            >
+              查看上游返回详情
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ScrollArea className="max-h-28 border-t">
+              <pre className="whitespace-pre-wrap break-words p-3 text-xs text-muted-foreground">
+                {record.upstreamError}
+              </pre>
+            </ScrollArea>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button size="sm" className="hover:bg-primary/80" onClick={onRetry}>
           <RefreshCw className="size-4" />
@@ -328,6 +390,7 @@ function CompletedState({
   onOpenLightbox,
   onDownload,
   onToggleFavorite,
+  onTogglePublic,
   onCopyPrompt,
   onRegenerate,
 }: {
@@ -335,6 +398,7 @@ function CompletedState({
   onOpenLightbox: () => void
   onDownload: () => void
   onToggleFavorite: () => void
+  onTogglePublic: () => void
   onCopyPrompt: () => void
   onRegenerate: () => void
 }) {
@@ -369,6 +433,7 @@ function CompletedState({
           record={record}
           onDownload={onDownload}
           onToggleFavorite={onToggleFavorite}
+          onTogglePublic={onTogglePublic}
           onCopyPrompt={onCopyPrompt}
           onRegenerate={onRegenerate}
         />
@@ -381,41 +446,24 @@ function PreviewActions({
   record,
   onDownload,
   onToggleFavorite,
+  onTogglePublic,
   onCopyPrompt,
   onRegenerate,
 }: {
   record: HistoryRecord
   onDownload: () => void
   onToggleFavorite: () => void
+  onTogglePublic: () => void
   onCopyPrompt: () => void
   onRegenerate: () => void
 }) {
   return (
     <>
-      <Popover>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <Button size="icon-xs" variant="ghost" aria-label="查看提示词">
-                <FileText className="size-3.5" />
-              </Button>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent>查看提示词</TooltipContent>
-        </Tooltip>
-        <PopoverContent
-          side="bottom"
-          align="end"
-          className="max-w-sm space-y-1"
-        >
-          <p className="text-sm whitespace-pre-wrap break-words">
-            {record.prompt}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {new Date(record.createdAt).toLocaleString()}
-          </p>
-        </PopoverContent>
-      </Popover>
+      <RecordDetailsPopover
+        record={record}
+        icon={<FileText className="size-3.5" />}
+        onCopyPrompt={() => onCopyPrompt()}
+      />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button size="icon-xs" variant="ghost" onClick={onDownload}>
@@ -444,6 +492,18 @@ function PreviewActions({
           </Button>
         </TooltipTrigger>
         <TooltipContent>{record.favorite ? "取消收藏" : "收藏"}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="icon-xs" variant="ghost" onClick={onTogglePublic}>
+            {record.isPublic ? (
+              <Lock className="size-3.5" />
+            ) : (
+              <Globe2 className="size-3.5" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{record.isPublic ? "取消公开" : "公开到社区"}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>

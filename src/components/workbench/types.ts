@@ -34,11 +34,15 @@ export type HistoryRecord = {
   imageError?: string
   referenceImages?: string[]
   error?: string
+  upstreamError?: string
   favorite: boolean
+  isPublic: boolean
+  promptPublic: boolean
   projectId?: number
   createdAt: number
   startedAt?: number
   completedAt?: number
+  publishedAt?: number
 }
 
 export type Project = {
@@ -51,6 +55,7 @@ export type Config = {
   baseUrl: string
   apiKey: string
   model: string
+  siteTitle: string
 }
 
 // 保留 baseUrl / apiKey 字段是为了向后兼容；新代码只读 model，
